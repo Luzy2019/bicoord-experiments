@@ -1,0 +1,14 @@
+python scripts/convert_aloha_data_to_lerobot_robotwin.py --raw_dir processed_data/build_tower_with_blocks-demo_clean-100/ --repo_id build_tower_with_blocks
+python scripts/convert_aloha_data_to_lerobot_robotwin.py --raw_dir processed_data/clean_table-demo_clean-100/ --repo_id clean_table
+python scripts/convert_aloha_data_to_lerobot_robotwin.py --raw_dir processed_data/collect_pens-demo_clean-100/ --repo_id collect_pens
+python scripts/convert_aloha_data_to_lerobot_robotwin.py --raw_dir processed_data/cook-demo_clean-100/ --repo_id cook
+python scripts/convert_aloha_data_to_lerobot_robotwin.py --raw_dir processed_data/divide_block_tower-demo_clean-100/ --repo_id divide_block_tower
+python scripts/convert_aloha_data_to_lerobot_robotwin.py --raw_dir processed_data/exchange_mics-demo_clean-100/ --repo_id exchange_mics
+python scripts/convert_aloha_data_to_lerobot_robotwin.py --raw_dir processed_data/extract_bottom_block_to_top-demo_clean-100/ --repo_id extract_bottom_block_to_top
+python scripts/convert_aloha_data_to_lerobot_robotwin.py --raw_dir processed_data/fetch_block_with_roller-demo_clean-100/ --repo_id fetch_block_with_roller
+python scripts/convert_aloha_data_to_lerobot_robotwin.py --raw_dir processed_data/handover_block_with_bowls-demo_clean-100/ --repo_id handover_block_with_bowls
+python scripts/convert_aloha_data_to_lerobot_robotwin.py --raw_dir processed_data/jigsaw-demo_clean-100/ --repo_id jigsaw
+python scripts/convert_aloha_data_to_lerobot_robotwin.py --raw_dir processed_data/place_plate_and_cup-demo_clean-100/ --repo_id place_plate_and_cup
+python scripts/convert_aloha_data_to_lerobot_robotwin.py --raw_dir processed_data/put_objects_cabinet-demo_clean-100/ --repo_id put_objects_cabinet
+python scripts/convert_aloha_data_to_lerobot_robotwin.py --raw_dir processed_data/stack_bowls-demo_clean-100/ --repo_id stack_bowls
+python scripts/convert_aloha_data_to_lerobot_robotwin.py --raw_dir processed_data/sweep_block-demo_clean-100/ --repo_id sweep_block

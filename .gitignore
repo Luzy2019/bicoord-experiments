@@ -1,0 +1,44 @@
+models/
+models_1/
+data/*
+__pycache__/
+**/checkpoints/
+result/
+envs/curobo
+*.zip
+viewer_show.*
+weights/
+eval_video/
+eval_video_1/
+# eval result
+eval_result/
+eval_result_1/
+# Code Generation
+assets/*
+!assets/_download.py
+!assets/files
+
+policy/weights/*
+
+envs/curobo/*
+
+.vscode
+/config.json
+
+/*.json*
+/*.txt
+aloha_maniskill_sim_1/
+aloha_maniskill_sim/
+
+policy/pi0/processed_data/
+policy/pi0/training_data/
+
+third_party/
+
+policy/ACT/act_ckpt
+policy/ACT/processed_data
+policy/DP/data
+policy/openvla-oft
+# policy/openvla-oft/data
+# policy/openvla-oft/workdir
+policy/GO1/processed_data

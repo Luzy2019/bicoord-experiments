@@ -1,0 +1,14 @@
+python scripts/process_data.py build_tower_with_blocks demo_clean 100
+python scripts/process_data.py clean_table demo_clean 100
+python scripts/process_data.py collect_pens demo_clean 100
+python scripts/process_data.py cook demo_clean 100
+python scripts/process_data.py divide_block_tower demo_clean 100
+python scripts/process_data.py exchange_mics demo_clean 100
+python scripts/process_data.py extract_bottom_block_to_top demo_clean 100
+python scripts/process_data.py fetch_block_with_roller demo_clean 100
+python scripts/process_data.py handover_block_with_bowls demo_clean 100
+python scripts/process_data.py jigsaw demo_clean 100
+python scripts/process_data.py place_plate_and_cup demo_clean 100
+python scripts/process_data.py put_objects_cabinet demo_clean 100
+python scripts/process_data.py stack_bowls demo_clean 100
+python scripts/process_data.py sweep_block demo_clean 100

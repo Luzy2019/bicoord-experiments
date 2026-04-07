@@ -1,0 +1,12 @@
+0,1
+swanlab: swanlab version 0.7.10 is available!  Upgrade: `pip install -U swanlab`
+swanlab: Tracking run with swanlab version 0.7.9
+swanlab: Run data will be saved locally in /home/dataset-local/RoboTwin/policy/pi05/swanlog/run-20260305_130603-4opacl5cq39qzw7sbov6v
+swanlab: 👋 Hi GradiusTwinbee,welcome to swanlab!
+swanlab: Syncing run balance_roller to the cloud
+swanlab: 🏠 View project at https://swanlab.cn/@GradiusTwinbee/bicoord_pi05
+swanlab: 🚀 View run at https://swanlab.cn/@GradiusTwinbee/bicoord_pi05/runs/4opacl5cq39qzw7sbov6v
+/home/dataset-assist-0/pxy/.cache/openpi/big_vision/paligemma_tokenizer.model
+swanlab: Error happened while training
+swanlab: 🏠 View project at https://swanlab.cn/@GradiusTwinbee/bicoord_pi05
+swanlab: 🚀 View run at https://swanlab.cn/@GradiusTwinbee/bicoord_pi05/runs/4opacl5cq39qzw7sbov6v

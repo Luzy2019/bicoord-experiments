@@ -1,0 +1,12 @@
+python scripts/process_data_rlbench.py bimanual_dual_push_buttons
+python scripts/process_data_rlbench.py bimanual_handover_item
+python scripts/process_data_rlbench.py bimanual_handover_item_easy
+python scripts/process_data_rlbench.py bimanual_lift_ball
+python scripts/process_data_rlbench.py bimanual_lift_tray
+python scripts/process_data_rlbench.py bimanual_pick_laptop
+python scripts/process_data_rlbench.py bimanual_pick_plate
+python scripts/process_data_rlbench.py bimanual_push_box
+python scripts/process_data_rlbench.py bimanual_put_bottle_in_fridge
+python scripts/process_data_rlbench.py bimanual_straighten_rope
+python scripts/process_data_rlbench.py bimanual_sweep_to_dustpan
+python scripts/process_data_rlbench.py bimanual_take_tray_out_of_oven

@@ -1,8 +1,8 @@
 # BiCoord: A Bimanual Manipulation Benchmark towards Long-Horizon Spatial-Temporal Coordination
 
-**Xingyu Peng^*,1,2^, Chen Gao^*,1,3^,  Liankai Jin^*,1^, Annan Li^1^, Si Liu^†,1^**
+**Xingyu Peng<sup>\*,1,2</sup>, Chen Gao<sup>\*,1,3</sup>,  Liankai Jin<sup>\*,1</sup>, Annan Li<sup>1</sup>, Si Liu<sup>†,1</sup>**
 
-Beihang University^1^, Zhongguancun Academy^2^, National University of Singapore^3^
+Beihang University<sup>1</sup>, Zhongguancun Academy<sup>2</sup>, National University of Singapore<sup>3</sup>
 
 **Website:** https://buaa-colalab.github.io/BiCoord/
 

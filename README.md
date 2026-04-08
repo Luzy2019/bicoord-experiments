@@ -6,7 +6,7 @@ Beihang University<sup>1</sup>, Zhongguancun Academy<sup>2</sup>, National Unive
 
 **Website:** https://buaa-colalab.github.io/BiCoord/
 
-![](assets\fig1.png)
+<img src="./assets/fig1.png" alt="description" style="display: block; margin: auto; width: 100%;">
 
 # Overview, Tasks & LeaderBoard
 

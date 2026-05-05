@@ -20,11 +20,12 @@ def _slice_from_start_dim(start: int, dim: int) -> slice:
 class FactorizedBimanualGate(nn.Module):
     """Predicts w(t), u(t) for conditional-vs-marginal bimanual correction."""
 
-    def __init__(self, 
+    def __init__(
+        self,
         action_dim: int,
         cond_dim: int,
         hidden_dim: int = 256,
-        init_bias: float = -2.0
+        init_bias: float = -2.0,
     ):
         super().__init__()
         self.net = nn.Sequential(
@@ -53,36 +54,36 @@ class FactorizedBimanualGate(nn.Module):
 
         pooled = torch.cat(
             [
-                full_noisy.mean(dim=1),               # 动作在horizon维度（即时间序列）上的均值  [batch, action_dim]
-                full_noisy.std(dim=1, unbiased=False) # 动作在horizon维度（即时间序列）上的标准差 [batch, action_dim]
+                full_noisy.mean(dim=1),
+                full_noisy.std(dim=1, unbiased=False),
             ],
             dim=-1,
         )
         if global_cond is None:
             global_cond = torch.zeros(
-                full_noisy.shape[0], 
-                0, 
-                device=full_noisy.device, 
-                dtype=full_noisy.dtype
+                full_noisy.shape[0],
+                0,
+                device=full_noisy.device,
+                dtype=full_noisy.dtype,
             )
-        # 将 pooled、global_cond 和 time_feat 拼接起来，然后通过 sigmoid 激活函数得到门控值
         return torch.sigmoid(self.net(torch.cat([pooled, global_cond, time_feat], dim=-1)))
 
 
-class FactorizedBimanualDiffusionUnetImagePolicy(BaseImagePolicy):
+class FactorizedBimanualTwoUnetImagePolicy(BaseImagePolicy):
     """
-    Factorized bimanual diffusion policy.
+    Factorized bimanual diffusion policy with two arm-specific denoisers.
 
-    Original DP learns p(a_left, a_right | obs) with one joint denoiser. This
-    policy uses one shared denoiser in four conditioning modes:
+    The left denoiser handles:
     - p(a_left | obs)
-    - p(a_right | obs)
     - p(a_left | obs, a_right)
+
+    The right denoiser handles:
+    - p(a_right | obs)
     - p(a_right | obs, a_left)
 
-    The final denoising prediction uses dynamic residual gates:
-    left = left_marginal + w(t) * (left_cond - left_marginal)
-    right = right_marginal + u(t) * (right_cond - right_marginal)
+    A cond_mask flag tells each arm denoiser whether the other-arm context is
+    available. Marginal mode uses zero context and cond_mask=0. Conditional
+    mode uses the other-arm context and cond_mask=1.
     """
 
     def __init__(
@@ -111,22 +112,17 @@ class FactorizedBimanualDiffusionUnetImagePolicy(BaseImagePolicy):
     ):
         super().__init__()
         if not obs_as_global_cond:
-            raise ValueError("FactorizedBimanualDiffusionUnetImagePolicy requires obs_as_global_cond=True")
+            raise ValueError("FactorizedBimanualTwoUnetImagePolicy requires obs_as_global_cond=True")
 
         action_shape = shape_meta["action"]["shape"]
         assert len(action_shape) == 1
         action_dim = action_shape[0]
         obs_feature_dim = obs_encoder.output_shape()[0]
 
-        # left_action_dim: 7
-        # right_action_dim: 7
         if left_action_dim is None:
             left_action_dim = action_dim // 2
         if right_action_dim is None:
             right_action_dim = action_dim - left_action_dim
-
-        # left_action_start: 0
-        # right_action_start: 7
         if right_action_start is None:
             right_action_start = left_action_start + left_action_dim
 
@@ -136,23 +132,29 @@ class FactorizedBimanualDiffusionUnetImagePolicy(BaseImagePolicy):
         self.right_slice = _slice_from_start_dim(int(right_action_start), self.right_action_dim)
 
         global_cond_dim = obs_feature_dim * n_obs_steps
+        left_cond_dim = global_cond_dim + self.right_action_dim * 2 + 1
+        right_cond_dim = global_cond_dim + self.left_action_dim * 2 + 1
 
-        if self.left_action_dim != self.right_action_dim:
-            raise ValueError("Shared factorized model requires equal left/right action dimensions")
-        arm_action_dim = self.left_action_dim
-        branch_cond_dim = global_cond_dim + arm_action_dim * 2 + 2
-        self.factorized_model = ConditionalUnet1D(
-            input_dim=arm_action_dim,
+        self.left_model = ConditionalUnet1D(
+            input_dim=self.left_action_dim,
             local_cond_dim=None,
-            global_cond_dim=branch_cond_dim,
+            global_cond_dim=left_cond_dim,
             diffusion_step_embed_dim=diffusion_step_embed_dim,
             down_dims=down_dims,
             kernel_size=kernel_size,
             n_groups=n_groups,
             cond_predict_scale=cond_predict_scale,
         )
-        
-        # w(t), u(t) for conditional-vs-marginal bimanual correction.
+        self.right_model = ConditionalUnet1D(
+            input_dim=self.right_action_dim,
+            local_cond_dim=None,
+            global_cond_dim=right_cond_dim,
+            diffusion_step_embed_dim=diffusion_step_embed_dim,
+            down_dims=down_dims,
+            kernel_size=kernel_size,
+            n_groups=n_groups,
+            cond_predict_scale=cond_predict_scale,
+        )
         self.factorized_gate = FactorizedBimanualGate(
             action_dim=action_dim,
             cond_dim=global_cond_dim,
@@ -160,62 +162,40 @@ class FactorizedBimanualDiffusionUnetImagePolicy(BaseImagePolicy):
             init_bias=factorized_gate_init_bias,
         )
 
-        # 观测编码器，用于提取观测特征
         self.obs_encoder = obs_encoder
-        # 添加噪声的调度器
         self.noise_scheduler = noise_scheduler
-        # 输入数据归一化器
         self.normalizer = LinearNormalizer()
-        # 序列长度
         self.horizon = horizon
-        # 经过编码后的观测特征维度
         self.obs_feature_dim = obs_feature_dim
-        # 动作维度
         self.action_dim = action_dim
-        # 每个采样包含的动作步数
         self.n_action_steps = n_action_steps
-        # 每个采样包含的观测步数
         self.n_obs_steps = n_obs_steps
-        # 是否将观测作为全局条件
         self.obs_as_global_cond = obs_as_global_cond
-        # 其他额外参数
         self.kwargs = kwargs
-        # 辅助损失函数的权重
         self.factorized_aux_loss_weight = float(factorized_aux_loss_weight)
-        # 保存最近一次门控信息，用于调试
         self.last_gate_info = None
-        # 保存最近一次损失字典
         self.last_loss_dict = {}
-        # 保存最近一次调试信息
         self.last_debug_info = None
 
-        # 如果未指定推理步数，则使用训练步数
         if num_inference_steps is None:
             num_inference_steps = noise_scheduler.config.num_train_timesteps
-        # 推理步数
         self.num_inference_steps = num_inference_steps
 
     def _encode_obs(self, obs_dict):
-        # 首先对输入的 obs_dict（观测字典）做归一化处理
         nobs = self.normalizer.normalize(obs_dict)
-        # 取归一化字典中的第一个 value，用于获取 batch 大小
         value = next(iter(nobs.values()))
         batch_size = value.shape[0]
-        # 对每个观测，只截取前 n_obs_steps 步，并将其展平成 (batch_size * n_obs_steps, ...) 的格式
         this_nobs = dict_apply(nobs, lambda x: x[:, :self.n_obs_steps, ...].reshape(-1, *x.shape[2:]))
-        # 输入编码器，获得观测特征 (flattened across batch)
         nobs_features = self.obs_encoder(this_nobs)
-        # 把特征 reshape 返回成 (batch_size, -1)，每个 batch 对应一个 feature 向量
         return nobs_features.reshape(batch_size, -1)
 
     def _combine_full(self, left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
         full = torch.zeros(
-            # 这里是 batch size，即每个批次中的样本数量
             left.shape[0],
             self.horizon,
             self.action_dim,
             device=left.device,
-            dtype=left.dtype
+            dtype=left.dtype,
         )
         full[:, :, self.left_slice] = left
         full[:, :, self.right_slice] = right
@@ -234,11 +214,21 @@ class FactorizedBimanualDiffusionUnetImagePolicy(BaseImagePolicy):
             dtype=reference.dtype,
         )
 
+    @staticmethod
+    def _expand_timesteps(timesteps, batch_size: int, device: torch.device) -> torch.Tensor:
+        if not torch.is_tensor(timesteps):
+            return torch.full((batch_size,), int(timesteps), dtype=torch.long, device=device)
+        timesteps = timesteps.to(device)
+        if timesteps.ndim == 0:
+            return timesteps.expand(batch_size)
+        if timesteps.shape[0] == 1:
+            return timesteps.expand(batch_size)
+        return timesteps
+
     def _branch_cond(
         self,
         global_cond: torch.Tensor,
         other_context: torch.Tensor,
-        arm_id: float,
         cond_mask: float,
     ) -> torch.Tensor:
         batch_size = global_cond.shape[0]
@@ -246,7 +236,6 @@ class FactorizedBimanualDiffusionUnetImagePolicy(BaseImagePolicy):
             [
                 global_cond,
                 other_context,
-                self._flag(batch_size, arm_id, global_cond),
                 self._flag(batch_size, cond_mask, global_cond),
             ],
             dim=-1,
@@ -272,31 +261,34 @@ class FactorizedBimanualDiffusionUnetImagePolicy(BaseImagePolicy):
         zero_left_context = torch.zeros_like(left_context)
         zero_right_context = torch.zeros_like(right_context)
 
-        # P(a_left | obs)
-        left_marginal = self.factorized_model(
-            left_noisy,
-            timesteps,
-            global_cond=self._branch_cond(global_cond, zero_right_context, arm_id=0.0, cond_mask=0.0),
-        )
-        # P(a_right | obs)
-        right_marginal = self.factorized_model(
-            right_noisy,
-            timesteps,
-            global_cond=self._branch_cond(global_cond, zero_left_context, arm_id=1.0, cond_mask=0.0),
-        )
+        batch_size = left_noisy.shape[0]
+        branch_timesteps = self._expand_timesteps(timesteps, batch_size, left_noisy.device)
+        branch_timesteps = torch.cat([branch_timesteps, branch_timesteps], dim=0)
 
-        # P(a_left | obs, a_right)
-        left_cond = self.factorized_model(
-            left_noisy,
-            timesteps,
-            global_cond=self._branch_cond(global_cond, right_context, arm_id=0.0, cond_mask=1.0),
+        left_outputs = self.left_model(
+            torch.cat([left_noisy, left_noisy], dim=0),
+            branch_timesteps,
+            global_cond=torch.cat(
+                [
+                    self._branch_cond(global_cond, zero_right_context, cond_mask=0.0),
+                    self._branch_cond(global_cond, right_context, cond_mask=1.0),
+                ],
+                dim=0,
+            ),
         )
-        # P(a_right | obs, a_left)
-        right_cond = self.factorized_model(
-            right_noisy,
-            timesteps,
-            global_cond=self._branch_cond(global_cond, left_context, arm_id=1.0, cond_mask=1.0),
+        right_outputs = self.right_model(
+            torch.cat([right_noisy, right_noisy], dim=0),
+            branch_timesteps,
+            global_cond=torch.cat(
+                [
+                    self._branch_cond(global_cond, zero_left_context, cond_mask=0.0),
+                    self._branch_cond(global_cond, left_context, cond_mask=1.0),
+                ],
+                dim=0,
+            ),
         )
+        left_marginal, left_cond = left_outputs.chunk(2, dim=0)
+        right_marginal, right_cond = right_outputs.chunk(2, dim=0)
 
         w = gates[:, 0].view(-1, 1, 1)
         u = gates[:, 1].view(-1, 1, 1)

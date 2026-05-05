@@ -1,7 +1,7 @@
 import sapien.core as sapien
 import numpy as np
 import pdb
-from .planner import MplibPlanner
+from envs.robot.planner import MplibPlanner
 import numpy as np
 import toppra as ta
 import math
@@ -12,7 +12,7 @@ from copy import deepcopy
 import sapien.core as sapien
 import envs._GLOBAL_CONFIGS as CONFIGS
 from envs.utils import transforms
-from .planner import CuroboPlanner
+from envs.robot.planner import CuroboPlanner
 import torch.multiprocessing as mp
 
 

@@ -110,7 +110,7 @@ def main(args):
     }
 
     if is_eval:
-        ckpt_names = [f"policy_best.ckpt"]
+        ckpt_names = [f"policy_last.ckpt"]
         results = []
         for ckpt_name in ckpt_names:
             success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True)
@@ -134,7 +134,7 @@ def main(args):
     best_epoch, min_val_loss, best_state_dict = best_ckpt_info
 
     # save best checkpoint
-    ckpt_path = os.path.join(ckpt_dir, f"policy_best.ckpt")
+    ckpt_path = os.path.join(ckpt_dir, f"policy_last.ckpt")
     torch.save(best_state_dict, ckpt_path)
     print(f"Best ckpt, val loss {min_val_loss:.6f} @ epoch{best_epoch}")
 

@@ -189,6 +189,8 @@ class RobotWorkspace(BaseWorkspace):
                             "epoch": self.epoch,
                             "lr": lr_scheduler.get_last_lr()[0],
                         }
+                        if hasattr(self.model, "last_loss_dict"):
+                            step_log.update(self.model.last_loss_dict)
 
                         is_last_batch = batch_idx == (len(train_dataloader) - 1)
                         if not is_last_batch:

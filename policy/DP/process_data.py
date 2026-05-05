@@ -51,7 +51,7 @@ def main():
     num = args.expert_data_num
     task_config = args.task_config
 
-    load_dir = "../../data/" + str(task_name) + "/" + str(task_config)
+    load_dir = "../../pretrain_datasets/" + str(task_name) + "/" + str(task_config)
 
     total_count = 0
 

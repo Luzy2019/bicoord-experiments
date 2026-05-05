@@ -47,7 +47,7 @@ class DETRVAE(nn.Module):
             aux_loss: True if auxiliary decoding losses (loss at each decoder layer) are to be used.
         """
         super().__init__()
-        self.num_queries = num_queries
+        self.num_queries = num_queries # chunk size
         self.camera_names = camera_names
         self.transformer = transformer
         self.encoder = encoder

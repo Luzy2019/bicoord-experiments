@@ -42,3 +42,7 @@ policy/openvla-oft
 # policy/openvla-oft/data
 # policy/openvla-oft/workdir
 policy/GO1/processed_data
+
+pretrain_datasets/
+
+**/*.ckpt

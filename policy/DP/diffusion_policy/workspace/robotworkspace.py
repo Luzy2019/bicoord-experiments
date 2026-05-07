@@ -66,6 +66,17 @@ class RobotWorkspace(BaseWorkspace):
             if lastest_ckpt_path.is_file():
                 print(f"Resuming from checkpoint {lastest_ckpt_path}")
                 self.load_checkpoint(path=lastest_ckpt_path)
+        init_ckpt_path = cfg.training.get("init_ckpt_path", None)
+        if init_ckpt_path and not cfg.training.resume:
+            print(f"Initializing model weights from checkpoint {init_ckpt_path}")
+            self.load_checkpoint(
+                path=init_ckpt_path,
+                exclude_keys=("optimizer",),
+                include_keys=(),
+                strict=False,
+            )
+            self.global_step = 0
+            self.epoch = 0
 
         # configure dataset
         dataset: BaseImageDataset

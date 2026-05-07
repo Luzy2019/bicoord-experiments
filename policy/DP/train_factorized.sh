@@ -10,6 +10,9 @@ gpu_id=${6}
 factorized_aux_loss_weight=${7:-0.25}
 factorized_gate_init_bias=${8:--2.0}
 batch_size=${9:-}
+train_stage=${10:-base}   # base | speed | joint
+speed_modulation_loss_weight=${11:-1e-2}
+init_ckpt_path=${12:-}
 
 head_camera_type=D435
 
@@ -17,7 +20,7 @@ DEBUG=False
 save_ckpt=True
 
 config_name=robot_dp_factorized_${action_dim}
-addition_info=factorized_train
+addition_info=factorized_${train_stage}
 exp_name=${task_name}-robot_dp-${addition_info}
 run_dir="data/outputs/${exp_name}_seed${seed}"
 
@@ -45,6 +48,36 @@ if [ -n "${batch_size}" ]; then
     batch_size_overrides+=("val_dataloader.batch_size=${batch_size}")
 fi
 
+speed_overrides=()
+if [ "${train_stage}" = "base" ]; then
+    speed_overrides+=("policy.speed_modulation_enabled=False")
+    speed_overrides+=("policy.speed_modulation_train_only=False")
+    speed_overrides+=("policy.speed_modulation_loss_weight=0.0")
+elif [ "${train_stage}" = "speed" ]; then
+    if [ -z "${init_ckpt_path}" ]; then
+        echo "Usage for speed stage: bash train_factorized.sh <task> <config> <data_num> <seed> <action_dim> <gpu> <aux_weight> <gate_bias> <batch_size> speed <speed_loss_weight> <init_ckpt_path>"
+        exit 1
+    fi
+    speed_overrides+=("training.resume=False")
+    speed_overrides+=("training.init_ckpt_path=${init_ckpt_path}")
+    speed_overrides+=("policy.speed_modulation_enabled=True")
+    speed_overrides+=("policy.speed_modulation_learned=True")
+    speed_overrides+=("policy.speed_modulation_train_only=True")
+    speed_overrides+=("policy.speed_modulation_loss_weight=${speed_modulation_loss_weight}")
+elif [ "${train_stage}" = "joint" ]; then
+    if [ -n "${init_ckpt_path}" ]; then
+        speed_overrides+=("training.resume=False")
+        speed_overrides+=("training.init_ckpt_path=${init_ckpt_path}")
+    fi
+    speed_overrides+=("policy.speed_modulation_enabled=True")
+    speed_overrides+=("policy.speed_modulation_learned=True")
+    speed_overrides+=("policy.speed_modulation_train_only=False")
+    speed_overrides+=("policy.speed_modulation_loss_weight=${speed_modulation_loss_weight}")
+else
+    echo "Unknown train_stage=${train_stage}; expected base, speed, or joint"
+    exit 1
+fi
+
 python train.py --config-name=${config_name}.yaml \
                             task.name=${task_name} \
                             task.dataset.zarr_path="data/${task_name}-${task_config}-${expert_data_num}.zarr" \
@@ -58,6 +91,7 @@ python train.py --config-name=${config_name}.yaml \
                             head_camera_type=$head_camera_type \
                             policy.factorized_aux_loss_weight=${factorized_aux_loss_weight} \
                             policy.factorized_gate_init_bias=${factorized_gate_init_bias} \
-                            "${batch_size_overrides[@]}"
+                            "${batch_size_overrides[@]}" \
+                            "${speed_overrides[@]}"
                             # checkpoint.save_ckpt=${save_ckpt}
                             # hydra.run.dir=${run_dir} \

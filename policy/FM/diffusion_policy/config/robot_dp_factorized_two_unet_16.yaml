@@ -1,0 +1,28 @@
+defaults:
+  - robot_dp_16
+  - _self_
+
+name: factorized_two_unet_flow_robot_${task.name}
+
+# Keep horizon = n_obs_steps + n_action_steps - 1 so predict_action returns a
+# full action chunk from action_pred[:, n_obs_steps-1:].
+n_action_steps: 6
+
+policy:
+  _target_: diffusion_policy.policy.factorized_bimanual_two_unet_flow_image_policy.FactorizedBimanualTwoUnetFlowImagePolicy
+  left_action_dim: 8
+  right_action_dim: 8
+  left_action_start: 0
+  right_action_start: 8
+  factorized_hidden_dim: 256
+  factorized_gate_init_bias: -2.0
+  factorized_aux_loss_weight: 0.25
+
+dataloader:
+  batch_size: 16
+
+val_dataloader:
+  batch_size: 16
+
+logging:
+  project: factorized_two_unet_diffusion_policy_debug

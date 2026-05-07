@@ -60,6 +60,20 @@ policy:
   kernel_size: 5
   n_groups: 8
   cond_predict_scale: True
+  speed_modulation_enabled: False
+  speed_modulation_strength: 1.0
+  speed_modulation_min: 0.5
+  speed_modulation_max: 2.0
+  speed_modulation_smooth: 3
+  speed_modulation_learned: True
+  speed_modulation_hidden_dim: 128
+  speed_modulation_loss_weight: 1.0e-2
+  speed_modulation_target_weight: 1.0
+  speed_modulation_smooth_weight: 1.0e-1
+  speed_modulation_fast_weight: 1.0e-2
+  speed_modulation_risk_weight: 1.0e-1
+  speed_modulation_detach_signal: True
+  speed_modulation_train_only: False
 
   # scheduler.step params
   # predict_epsilon: True
@@ -98,6 +112,7 @@ training:
   seed: 42
   debug: False
   resume: True
+  init_ckpt_path: null
   # optimization
   lr_scheduler: cosine
   lr_warmup_steps: 500

@@ -88,30 +88,40 @@ class DP:
         if len(self.debug_records) >= self.debug_max_calls:
             return
         debug_info = getattr(self.policy, "last_debug_info", None)
-        if not debug_info:
-            return
 
-        record = {
-            "timesteps": np.asarray([item["timestep"] for item in debug_info], dtype=np.int64),
-        }
-        tensor_keys = [
-            "factorized_gates",
-            "left_marginal",
-            "right_marginal",
-            "left_cond",
-            "right_cond",
-            "left_pred",
-            "right_pred",
-        ]
-        for key in tensor_keys:
-            record[key] = np.stack([item[key].numpy() for item in debug_info], axis=0)
+        record = {}
+        if debug_info:
+            record["timesteps"] = np.asarray([item["timestep"] for item in debug_info], dtype=np.int64)
+            tensor_keys = [
+                "factorized_gates",
+                "left_marginal",
+                "right_marginal",
+                "left_cond",
+                "right_cond",
+                "left_pred",
+                "right_pred",
+            ]
+            for key in tensor_keys:
+                record[key] = np.stack([item[key].numpy() for item in debug_info], axis=0)
 
         action_debug_info = getattr(self.policy, "last_action_debug_info", None)
         if action_debug_info:
             for key, value in action_debug_info.items():
                 record[key] = value.numpy()
 
-        self.debug_records.append(record)
+        speed_debug_keys = [
+            "last_speed_alpha",
+            "last_left_speed_alpha",
+            "last_right_speed_alpha",
+            "last_action_pred_raw",
+        ]
+        for attr_name in speed_debug_keys:
+            value = getattr(self.policy, attr_name, None)
+            if value is not None:
+                record[attr_name.replace("last_", "")] = value.detach().cpu().numpy()
+
+        if record:
+            self.debug_records.append(record)
 
     def _flush_factorized_debug(self):
         if not self.debug_dir or not self.debug_records:

@@ -7,5 +7,5 @@ seed: null
 instruction_type: unseen
 
 expert_data_num: null
-checkpoint_num: 400
+checkpoint_num: 800
 head_camera_type: D435

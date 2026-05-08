@@ -7,10 +7,10 @@ set -e
 #   bash train_factorized_speed_staged.sh <task_name> <task_config> <expert_data_num> <seed> <action_dim> <gpu_id> [batch_size] [aux_weight] [gate_bias] [speed_loss_weight] [base_ckpt_num|auto] [run_base]
 #
 # Example:
-#   bash train_factorized_speed_staged.sh stack_bowls demo_clean 50 0 14 0 24 0.25 -2.0 1e-2 auto true
+#   bash train_factorized_speed_staged.sh stack_bowls demo_clean 50 100 14 0 96 0.25 -2.0 1e-2 auto true
 #
 # If you already have a factorized base checkpoint:
-#   bash train_factorized_speed_staged.sh stack_bowls demo_clean 50 0 14 0 24 0.25 -2.0 1e-2 900 false
+#   bash train_factorized_speed_staged.sh stack_bowls demo_clean 50 100 14 0 96 0.25 -2.0 1e-2 400 false
 
 task_name=${1}
 task_config=${2}

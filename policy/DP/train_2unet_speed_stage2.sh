@@ -7,9 +7,9 @@
 #   bash train_2unet_speed_stage2.sh <task_name> <task_config> <expert_data_num> <seed> <action_dim> <gpu_id> <base_ckpt_path> [batch_size] [speed_loss_weight] [num_epochs]
 #
 # Example:
-#   bash train_2unet_speed_stage2.sh stack_bowls demo_clean 50 0 14 0 \
-#     data/outputs/2026.05.06/12.30.00_factorized_robot_stack_bowls_stack_bowls/checkpoints/latest.ckpt \
-#     24 1e-2 100
+#   bash train_2unet_speed_stage2.sh stack_bowls demo_clean 50 100 14 0 \
+#     checkpoints/stack_bowls-demo_clean-50-100-factorized_base/400.ckpt \
+#     160 1e-2 600
 
 set -e
 

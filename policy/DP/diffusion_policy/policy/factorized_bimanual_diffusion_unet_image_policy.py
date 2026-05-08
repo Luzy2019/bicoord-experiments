@@ -483,6 +483,8 @@ class FactorizedBimanualDiffusionUnetImagePolicy(BaseImagePolicy):
             )
             speed_loss = 0.5 * (left_speed_loss + right_speed_loss)
             total_loss = total_loss + self.speed_modulation_loss_weight * speed_loss
+
+            # log
             left_coupling_risk = compute_branch_mse_risk(gate_info["left_cond"], gate_info["left_marginal"])
             right_coupling_risk = compute_branch_mse_risk(gate_info["right_cond"], gate_info["right_marginal"])
             speed_loss_dict = {

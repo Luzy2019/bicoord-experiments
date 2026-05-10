@@ -1,17 +1,17 @@
 defaults:
-  - _self_
   - task: default_task_14
+  - _self_
 
-name: robot_${task.name}
+name: factorized_robot_${task.name}
 _target_: diffusion_policy.workspace.robotworkspace.RobotWorkspace
 
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}
-exp_name: "default"
+exp_name: ${factorized_stages.base_stage1.exp_name}
 
-horizon: 8
+horizon: 12
 n_obs_steps: 3
-n_action_steps: 8
+n_action_steps: 10
 n_latency_steps: 0
 dataset_obs_steps: ${n_obs_steps}
 past_action_visible: False
@@ -19,7 +19,7 @@ keypoint_visible_rate: 1.0
 obs_as_global_cond: True
 
 policy:
-  _target_: diffusion_policy.policy.diffusion_unet_image_policy.DiffusionUnetImagePolicy
+  _target_: diffusion_policy.policy.factorized_bimanual_diffusion_unet_image_policy.FactorizedBimanualDiffusionUnetImagePolicy
 
   shape_meta: ${shape_meta}
   
@@ -60,6 +60,13 @@ policy:
   kernel_size: 5
   n_groups: 8
   cond_predict_scale: True
+  left_action_dim: 7
+  right_action_dim: 7
+  left_action_start: 0
+  right_action_start: 7
+  factorized_hidden_dim: 256
+  factorized_gate_init_bias: -2.0
+  factorized_aux_loss_weight: 0.25
   speed_modulation_enabled: False
   speed_modulation_strength: 1.0
   speed_modulation_min: 0.5
@@ -74,6 +81,8 @@ policy:
   speed_modulation_risk_weight: 1.0e-1
   speed_modulation_detach_signal: True
   speed_modulation_train_only: False
+  speed_modulation_coupling_risk_weight: 1.0
+  speed_modulation_geometry_risk_weight: 0.25
 
   # scheduler.step params
   # predict_epsilon: True
@@ -109,10 +118,11 @@ optimizer:
 
 training:
   device: "cuda:0"
-  seed: 42
+  seed: 100
   debug: False
-  resume: True
+  resume: False
   init_ckpt_path: null
+  checkpoint_dir_name: null
   # optimization
   lr_scheduler: cosine
   lr_warmup_steps: 500
@@ -125,7 +135,7 @@ training:
   # training loop control
   # in epochs
   rollout_every: 50
-  checkpoint_every: 100
+  checkpoint_every: 50
   val_every: 1
   sample_every: 5
   # steps per epoch
@@ -135,7 +145,7 @@ training:
   tqdm_interval_sec: 1.0
 
 logging:
-  project: diffusion_policy_debug
+  project: factorized_diffusion_policy_debug
   resume: True
   mode: online
   name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
@@ -165,6 +175,42 @@ hydra:
     dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
     subdir: ${hydra.job.num}
 
-setting: null
-expert_data_num: null
-head_camera_type: null
+task:
+  name: stack_bowls
+  dataset:
+    zarr_path: data/${task.name}-${setting}-${expert_data_num}.zarr
+
+setting: demo_clean
+expert_data_num: 50
+head_camera_type: D435
+
+runtime:
+  gpu_id: 0
+
+factorized_stages:
+  base_stage1:
+    exp_name: ${task.name}-robot_dp-factorized_base_stage1
+    training:
+      resume: False
+      init_ckpt_path: null
+      num_epochs: 600
+      checkpoint_every: 50
+      checkpoint_dir_name: null
+    policy:
+      speed_modulation_enabled: False
+      speed_modulation_learned: True
+      speed_modulation_train_only: False
+      speed_modulation_loss_weight: 0.0
+  speed_stage2:
+    exp_name: ${task.name}-robot_dp-factorized_speed_stage2
+    training:
+      resume: False
+      init_ckpt_path: checkpoints/${task.name}-${setting}-${expert_data_num}-${training.seed}/600.ckpt
+      num_epochs: 100
+      checkpoint_every: 5
+      checkpoint_dir_name: ${task.name}-${setting}-${expert_data_num}-${training.seed}-speed
+    policy:
+      speed_modulation_enabled: True
+      speed_modulation_learned: True
+      speed_modulation_train_only: True
+      speed_modulation_loss_weight: 1.0e-2

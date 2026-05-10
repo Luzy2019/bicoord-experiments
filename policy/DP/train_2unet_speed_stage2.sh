@@ -34,7 +34,7 @@ fi
 head_camera_type=D435
 DEBUG=False
 
-config_name=robot_dp_factorized_${action_dim}
+config_name=robot_dp_2unet_${action_dim}
 addition_info=2unet_speed_stage2
 exp_name=${task_name}-robot_dp-${addition_info}
 checkpoint_dir_name="${task_name}-${task_config}-${expert_data_num}-${seed}-speed"

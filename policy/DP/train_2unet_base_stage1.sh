@@ -26,7 +26,7 @@ total_train_epoch=${11:-}
 head_camera_type=D435
 DEBUG=False
 
-config_name=robot_dp_factorized_${action_dim}
+config_name=robot_dp_2unet_${action_dim}
 addition_info=2unet_base_train
 exp_name=${task_name}-robot_dp-${addition_info}
 

@@ -2,12 +2,12 @@ defaults:
   - task: default_task_16
   - _self_
 
-name: factorized_robot_${task.name}
+name: factorized_two_unet_robot_${task.name}
 _target_: diffusion_policy.workspace.robotworkspace.RobotWorkspace
 
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}
-exp_name: ${factorized_stages.base_stage1.exp_name}
+exp_name: ${two_unet_stages.base_stage1.exp_name}
 
 horizon: 12
 n_obs_steps: 3
@@ -19,19 +19,19 @@ keypoint_visible_rate: 1.0
 obs_as_global_cond: True
 
 policy:
-  _target_: diffusion_policy.policy.factorized_bimanual_diffusion_unet_image_policy.FactorizedBimanualDiffusionUnetImagePolicy
+  _target_: diffusion_policy.policy.factorized_bimanual_two_unet_image_policy.FactorizedBimanualTwoUnetImagePolicy
 
   shape_meta: ${shape_meta}
-  
+
   noise_scheduler:
     _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
     num_train_timesteps: 100
     beta_start: 0.0001
     beta_end: 0.02
     beta_schedule: squaredcos_cap_v2
-    variance_type: fixed_small # Yilun's paper uses fixed_small_log instead, but easy to cause Nan
-    clip_sample: True # required when predict_epsilon=False
-    prediction_type: epsilon # or sample
+    variance_type: fixed_small
+    clip_sample: True
+    prediction_type: epsilon
 
   obs_encoder:
     _target_: diffusion_policy.model.vision.multi_image_obs_encoder.MultiImageObsEncoder
@@ -42,7 +42,6 @@ policy:
       weights: null
     resize_shape: null
     crop_shape: null
-    # constant center crop
     random_crop: True
     use_group_norm: True
     share_rgb_model: False
@@ -53,9 +52,7 @@ policy:
   n_obs_steps: ${n_obs_steps}
   num_inference_steps: 100
   obs_as_global_cond: ${obs_as_global_cond}
-  # crop_shape: null
   diffusion_step_embed_dim: 128
-  # down_dims: [512, 1024, 2048]
   down_dims: [256, 512, 1024]
   kernel_size: 5
   n_groups: 8
@@ -84,9 +81,6 @@ policy:
   speed_modulation_coupling_risk_weight: 1.0
   speed_modulation_geometry_risk_weight: 0.25
 
-  # scheduler.step params
-  # predict_epsilon: True
-
 ema:
   _target_: diffusion_policy.model.diffusion.ema_model.EMAModel
   update_after_step: 0
@@ -96,14 +90,14 @@ ema:
   max_value: 0.9999
 
 dataloader:
-  batch_size: 128
+  batch_size: 16
   num_workers: 0
   shuffle: True
   pin_memory: True
   persistent_workers: False
 
 val_dataloader:
-  batch_size: 128
+  batch_size: 16
   num_workers: 0
   shuffle: False
   pin_memory: True
@@ -123,29 +117,22 @@ training:
   resume: False
   init_ckpt_path: null
   checkpoint_dir_name: null
-  # optimization
   lr_scheduler: cosine
   lr_warmup_steps: 500
   num_epochs: 600
   gradient_accumulate_every: 1
-  # EMA destroys performance when used with BatchNorm
-  # replace BatchNorm with GroupNorm.
   use_ema: True
   freeze_encoder: False
-  # training loop control
-  # in epochs
   rollout_every: 50
   checkpoint_every: 50
   val_every: 1
   sample_every: 5
-  # steps per epoch
   max_train_steps: null
   max_val_steps: null
-  # misc
   tqdm_interval_sec: 1.0
 
 logging:
-  project: factorized_diffusion_policy_debug
+  project: factorized_two_unet_diffusion_policy_debug
   resume: True
   mode: online
   name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
@@ -187,9 +174,9 @@ head_camera_type: D435
 runtime:
   gpu_id: 0
 
-factorized_stages:
+two_unet_stages:
   base_stage1:
-    exp_name: ${task.name}-robot_dp-factorized_base_stage1
+    exp_name: ${task.name}-robot_dp-2unet_base_stage1
     training:
       resume: False
       init_ckpt_path: null
@@ -202,7 +189,7 @@ factorized_stages:
       speed_modulation_train_only: False
       speed_modulation_loss_weight: 0.0
   speed_stage2:
-    exp_name: ${task.name}-robot_dp-factorized_speed_stage2
+    exp_name: ${task.name}-robot_dp-2unet_speed_stage2
     training:
       resume: False
       init_ckpt_path: checkpoints/${task.name}-${setting}-${expert_data_num}-${training.seed}/600.ckpt

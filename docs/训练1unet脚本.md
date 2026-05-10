@@ -3,15 +3,15 @@
 cd policy/DP
 
 # 只训练 base：600 epoch，每 50 epoch 保存一次
+# 训练参数先修改：policy/DP/diffusion_policy/config/robot_dp_14.yaml 的 factorized_stages.base_stage1
 # 输出目录：checkpoints/stack_bowls-demo_clean-50-100
-bash train_factorized_speed_staged.sh stack_bowls demo_clean 50 100 14 0 \
-    96 0.25 -2.0 1e-2 auto base 50 600
+bash train_factorized_base_stage1.sh robot_dp_14
 
 # 只训练 speed：从 base 的 400.ckpt 初始化，100 epoch，每 5 epoch 保存一次
-# 读取：checkpoints/stack_bowls-demo_clean-50-100/400.ckpt
+# 训练参数先修改：policy/DP/diffusion_policy/config/robot_dp_14.yaml 的 factorized_stages.speed_stage2
+# 读取：training.init_ckpt_path
 # 输出目录：checkpoints/stack_bowls-demo_clean-50-100-speed
-bash train_factorized_speed_staged.sh stack_bowls demo_clean 50 100 14 0 \
-    96 0.25 -2.0 1e-2 400 speed 5 100
+bash train_factorized_speed_stage2.sh robot_dp_14
 
 # eval base：评估 base 的 400.ckpt，关闭 speed modulation
 bash eval_trained.sh stack_bowls demo_clean demo_clean 50 100 0 400 false

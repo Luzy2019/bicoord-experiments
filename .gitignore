@@ -46,3 +46,11 @@ policy/GO1/processed_data
 pretrain_datasets/
 
 **/*.ckpt
+
+
+DP3/
+DP_Asym/
+GO1/
+pi0/
+pi05/
+TinyVLA/

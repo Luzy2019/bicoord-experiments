@@ -8,7 +8,7 @@ import numpy as np
 
 
 DEFAULT_LOG = Path(
-    "data/outputs/2026.05.08/12.58.18_factorized_robot_stack_bowls_stack_bowls/logs.json.txt"
+    "data/outputs/2026.05.08/14.26.05_factorized_robot_stack_bowls_stack_bowls/logs.json.txt"
 )
 
 

@@ -3,10 +3,10 @@
 # Stage 1: train a stable factorized bimanual base policy without speed-head loss.
 #
 # Usage:
-#   bash train_2unet_base.sh <task_name> <task_config> <expert_data_num> <seed> <action_dim> <gpu_id> [batch_size] [factorized_aux_loss_weight] [factorized_gate_init_bias]
+#   bash train_2unet_base_stage1.sh <task_name> <task_config> <expert_data_num> <seed> <action_dim> <gpu_id> [batch_size] [factorized_aux_loss_weight] [factorized_gate_init_bias] [every_save_epoch] [total_train_epoch]
 #
 # Example:
-#   bash train_2unet_base.sh stack_bowls demo_clean 50 100 14 0 160 0.25 -2.0
+#   bash train_2unet_base_stage1.sh stack_bowls demo_clean 50 100 14 0 160 0.25 -2.0 5 100
 
 set -e
 
@@ -20,6 +20,8 @@ gpu_id=${6}
 batch_size=${7:-24}
 factorized_aux_loss_weight=${8:-0.25}
 factorized_gate_init_bias=${9:--2.0}
+every_save_epoch=${10:-}
+total_train_epoch=${11:-}
 
 head_camera_type=D435
 DEBUG=False
@@ -61,6 +63,8 @@ python train.py --config-name=${config_name}.yaml \
     head_camera_type=${head_camera_type} \
     dataloader.batch_size=${batch_size} \
     val_dataloader.batch_size=${batch_size} \
+    ${every_save_epoch:+training.checkpoint_every=${every_save_epoch}} \
+    ${total_train_epoch:+training.num_epochs=${total_train_epoch}} \
     policy.factorized_aux_loss_weight=${factorized_aux_loss_weight} \
     policy.factorized_gate_init_bias=${factorized_gate_init_bias} \
     policy.speed_modulation_enabled=False \

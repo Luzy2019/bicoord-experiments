@@ -13,6 +13,9 @@ batch_size=${9:-}
 train_stage=${10:-base}   # base | speed | joint
 speed_modulation_loss_weight=${11:-1e-2}
 init_ckpt_path=${12:-}
+every_save_epoch=${13:-}
+total_train_epoch=${14:-}
+checkpoint_dir_name=${15:-}
 
 head_camera_type=D435
 
@@ -38,7 +41,24 @@ export HYDRA_FULL_ERROR=1
 export CUDA_VISIBLE_DEVICES=${gpu_id}
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-if [ ! -d "./data/${task_name}-${task_config}-${expert_data_num}.zarr" ]; then
+zarr_path="./data/${task_name}-${task_config}-${expert_data_num}.zarr"
+if [ ! -d "${zarr_path}" ]; then
+    bash process_data.sh ${task_name} ${task_config} ${expert_data_num}
+elif ! python - "${zarr_path}" <<'PY'
+import sys
+import zarr
+
+root = zarr.open(sys.argv[1], mode="r")
+data = root["data"]
+required_keys = {"head_camera", "left_camera", "right_camera", "state", "action"}
+missing_keys = sorted(required_keys - set(data.keys()))
+if missing_keys:
+    print("Missing zarr keys:", ", ".join(missing_keys))
+    raise SystemExit(1)
+PY
+then
+    echo "Existing zarr is missing wrist camera data; rebuilding ${zarr_path}"
+    rm -rf "${zarr_path}"
     bash process_data.sh ${task_name} ${task_config} ${expert_data_num}
 fi
 
@@ -46,6 +66,17 @@ batch_size_overrides=()
 if [ -n "${batch_size}" ]; then
     batch_size_overrides+=("dataloader.batch_size=${batch_size}")
     batch_size_overrides+=("val_dataloader.batch_size=${batch_size}")
+fi
+
+training_overrides=()
+if [ -n "${every_save_epoch}" ]; then
+    training_overrides+=("training.checkpoint_every=${every_save_epoch}")
+fi
+if [ -n "${total_train_epoch}" ]; then
+    training_overrides+=("training.num_epochs=${total_train_epoch}")
+fi
+if [ -n "${checkpoint_dir_name}" ]; then
+    training_overrides+=("+training.checkpoint_dir_name=${checkpoint_dir_name}")
 fi
 
 speed_overrides=()
@@ -92,6 +123,7 @@ python train.py --config-name=${config_name}.yaml \
                             policy.factorized_aux_loss_weight=${factorized_aux_loss_weight} \
                             policy.factorized_gate_init_bias=${factorized_gate_init_bias} \
                             "${batch_size_overrides[@]}" \
+                            "${training_overrides[@]}" \
                             "${speed_overrides[@]}"
                             # checkpoint.save_ckpt=${save_ckpt}
                             # hydra.run.dir=${run_dir} \

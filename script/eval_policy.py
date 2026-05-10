@@ -62,6 +62,14 @@ def get_embodiment_config(robot_file):
     return embodiment_args
 
 
+def as_bool(value, default=False):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).lower() in ("1", "true", "yes", "y", "on")
+
+
 def main(usr_args):
     current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     task_name = usr_args["task_name"]
@@ -82,6 +90,9 @@ def main(usr_args):
     args['task_name'] = task_name
     args["task_config"] = task_config
     args["ckpt_setting"] = ckpt_setting
+    args["eval_video_overlay"] = as_bool(usr_args.get("eval_video_overlay"), False)
+    args["eval_debug_json"] = as_bool(usr_args.get("eval_debug_json"), False)
+    args["eval_video_fps"] = int(usr_args.get("eval_video_fps", 10))
 
     embodiment_type = args.get("embodiment")
     embodiment_config_path = os.path.join(CONFIGS_PATH, "_embodiment_config.yml")
@@ -160,7 +171,7 @@ def main(usr_args):
 
     st_seed = 100000 * (1 + seed)
     suc_nums = []
-    test_num = 5
+    test_num = 100
     topk = 1
 
     model = get_model(usr_args)
@@ -211,6 +222,9 @@ def eval_policy(task_name,
     policy_name = args["policy_name"]
     eval_func = eval_function_decorator(policy_name, "eval")
     reset_func = eval_function_decorator(policy_name, "reset_model")
+    eval_video_fps = int(args.get("eval_video_fps", 10))
+    eval_video_overlay = as_bool(args.get("eval_video_overlay"), False)
+    eval_debug_json = as_bool(args.get("eval_debug_json"), False)
 
     now_seed = st_seed
     task_total_reward = 0
@@ -277,7 +291,7 @@ def eval_policy(task_name,
                     "-video_size",
                     video_size,
                     "-framerate",
-                    "10",
+                    str(eval_video_fps),
                     "-i",
                     "-",
                     "-pix_fmt",
@@ -291,6 +305,17 @@ def eval_policy(task_name,
                 stdin=subprocess.PIPE,
             )
             TASK_ENV._set_eval_video_ffmpeg(ffmpeg)
+
+        if eval_video_overlay or eval_debug_json:
+            TASK_ENV.eval_video_fps = eval_video_fps
+            TASK_ENV.eval_overlay_enabled = eval_video_overlay
+            if hasattr(model, "get_debug_overlay"):
+                TASK_ENV.eval_overlay_provider = model.get_debug_overlay
+            if eval_debug_json and TASK_ENV.eval_video_path is not None:
+                debug_path = Path(TASK_ENV.eval_video_path) / f"episode{TASK_ENV.test_num}_debug.jsonl"
+                if debug_path.exists():
+                    debug_path.unlink()
+                TASK_ENV.eval_debug_jsonl_path = str(debug_path)
 
         succ = False
         reset_func(model)

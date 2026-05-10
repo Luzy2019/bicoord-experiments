@@ -39,6 +39,7 @@ class DPRunner:
 
         self.obs = deque(maxlen=n_obs_steps + 1)
         self.env = None
+        self.last_action_dict = None
 
     def stack_last_n_obs(self, all_obs, n_steps):
         assert len(all_obs) > 0
@@ -99,5 +100,6 @@ class DPRunner:
 
         # device_transfer
         np_action_dict = dict_apply(action_dict, lambda x: x.detach().to("cpu").numpy())
+        self.last_action_dict = np_action_dict
         action = np_action_dict["action"].squeeze(0)
         return action

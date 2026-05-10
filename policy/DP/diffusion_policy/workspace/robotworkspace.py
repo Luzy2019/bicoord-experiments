@@ -274,8 +274,11 @@ class RobotWorkspace(BaseWorkspace):
                 # checkpoint
                 if ((self.epoch + 1) % cfg.training.checkpoint_every) == 0:
                     # checkpointing
-                    save_name = pathlib.Path(self.cfg.task.dataset.zarr_path).stem
-                    self.save_checkpoint(f"checkpoints/{save_name}-{seed}/{self.epoch + 1}.ckpt")  # TODO
+                    checkpoint_dir_name = cfg.training.get("checkpoint_dir_name", None)
+                    if checkpoint_dir_name is None:
+                        save_name = pathlib.Path(self.cfg.task.dataset.zarr_path).stem
+                        checkpoint_dir_name = f"{save_name}-{seed}"
+                    self.save_checkpoint(f"checkpoints/{checkpoint_dir_name}/{self.epoch + 1}.ckpt")  # TODO
 
                 # ========= eval end for this epoch ==========
                 policy.train()

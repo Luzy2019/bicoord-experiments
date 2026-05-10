@@ -24,6 +24,11 @@ import trimesh
 import imageio
 import glob
 
+try:
+    import cv2
+except ImportError:
+    cv2 = None
+
 
 from ._GLOBAL_CONFIGS import *
 
@@ -98,6 +103,10 @@ class Base_Task(gym.Env):
         self.now_obs = {}
         self.take_action_cnt = 0
         self.eval_video_path = kwags.get("eval_video_save_dir", None)
+        self.eval_video_fps = kwags.get("eval_video_fps", 10)
+        self.eval_overlay_enabled = kwags.get("eval_video_overlay", False)
+        self.eval_overlay_provider = None
+        self.eval_debug_jsonl_path = None
 
         self.save_freq = kwags.get("save_freq")
         self.world_pcd = None
@@ -624,6 +633,109 @@ class Base_Task(gym.Env):
             self.eval_video_ffmpeg.stdin.close()
             self.eval_video_ffmpeg.wait()
             del self.eval_video_ffmpeg
+
+    def _json_safe_eval_debug(self, value):
+        if isinstance(value, dict):
+            return {k: self._json_safe_eval_debug(v) for k, v in value.items()}
+        if isinstance(value, np.ndarray):
+            return value.tolist()
+        if isinstance(value, np.generic):
+            return value.item()
+        if isinstance(value, (list, tuple)):
+            return [self._json_safe_eval_debug(v) for v in value]
+        return value
+
+    def _get_eval_debug_info(self):
+        info = {}
+        if callable(self.eval_overlay_provider):
+            try:
+                info = self.eval_overlay_provider() or {}
+            except Exception as e:
+                info = {"overlay_error": str(e)}
+        info.update({
+            "episode": int(getattr(self, "test_num", getattr(self, "ep_num", 0))),
+            "env_step": int(self.take_action_cnt),
+            "step_limit": int(getattr(self, "step_lim", 0)),
+            "video_fps": float(getattr(self, "eval_video_fps", 10)),
+            "eval_success": bool(getattr(self, "eval_success", False)),
+            "stage_eval_score": self._json_safe_eval_debug(getattr(self, "stage_eval_score", None)),
+            "instruction": getattr(self, "instruction", None),
+        })
+        try:
+            info["left_gripper_actual"] = float(self.robot.get_left_gripper_val())
+            info["right_gripper_actual"] = float(self.robot.get_right_gripper_val())
+        except Exception:
+            pass
+        return self._json_safe_eval_debug(info)
+
+    def _append_eval_debug_jsonl(self, info):
+        if not self.eval_debug_jsonl_path:
+            return
+        with open(self.eval_debug_jsonl_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(info, ensure_ascii=False) + "\n")
+
+    def _format_overlay_array(self, value, max_items=7):
+        if value is None:
+            return "None"
+        arr = np.asarray(value, dtype=np.float32).reshape(-1)
+        shown = " ".join(f"{x:.2f}" for x in arr[:max_items])
+        return shown + (" ..." if arr.size > max_items else "")
+
+    def _draw_eval_overlay(self, frame, info):
+        if not self.eval_overlay_enabled or cv2 is None:
+            return frame
+        frame = np.ascontiguousarray(frame.copy())
+        lines = [
+            f"ep {info.get('episode')} step {info.get('env_step')}/{info.get('step_limit')} fps {info.get('video_fps')}",
+            f"policy {info.get('policy_call_idx')} chunk {info.get('chunk_step')}/{info.get('chunk_len')} success {info.get('eval_success')}",
+            f"speed {info.get('speed_enabled')} learned {info.get('speed_learned')} strength {info.get('speed_strength')}",
+        ]
+        if "left_speed_alpha_mean" in info or "right_speed_alpha_mean" in info:
+            lines.append(
+                "L alpha mean/min/max "
+                f"{info.get('left_speed_alpha_mean', 0):.2f}/"
+                f"{info.get('left_speed_alpha_min', 0):.2f}/"
+                f"{info.get('left_speed_alpha_max', 0):.2f}"
+            )
+            lines.append(
+                "R alpha mean/min/max "
+                f"{info.get('right_speed_alpha_mean', 0):.2f}/"
+                f"{info.get('right_speed_alpha_min', 0):.2f}/"
+                f"{info.get('right_speed_alpha_max', 0):.2f}"
+            )
+        elif "speed_alpha_mean" in info:
+            lines.append(
+                "alpha mean/min/max "
+                f"{info.get('speed_alpha_mean', 0):.2f}/"
+                f"{info.get('speed_alpha_min', 0):.2f}/"
+                f"{info.get('speed_alpha_max', 0):.2f}"
+            )
+        lines.extend([
+            f"L act {self._format_overlay_array(info.get('left_action'))}",
+            f"R act {self._format_overlay_array(info.get('right_action'))}",
+            f"L/R grip target {info.get('left_gripper')} / {info.get('right_gripper')}",
+            f"L/R grip actual {info.get('left_gripper_actual')} / {info.get('right_gripper_actual')}",
+        ])
+
+        line_h = 18
+        x, y = 10, 22
+        box_h = line_h * len(lines) + 12
+        box_w = min(frame.shape[1] - 20, 760)
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (4, 4), (box_w, box_h), (0, 0, 0), -1)
+        frame = cv2.addWeighted(overlay, 0.55, frame, 0.45, 0)
+        for i, text in enumerate(lines):
+            cv2.putText(
+                frame,
+                text,
+                (x, y + i * line_h),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.48,
+                (255, 255, 255),
+                1,
+                cv2.LINE_AA,
+            )
+        return frame
 
     def delay(self, delay_time, save_freq=None):
         render_freq = self.render_freq
@@ -1496,7 +1608,11 @@ class Base_Task(gym.Env):
 
         eval_video_freq = 1  # fixed
         if (self.eval_video_path is not None and self.take_action_cnt % eval_video_freq == 0):
-            self.eval_video_ffmpeg.stdin.write(self.now_obs["observation"]["head_camera"]["rgb"].tobytes())
+            frame = self.now_obs["observation"]["head_camera"]["rgb"]
+            debug_info = self._get_eval_debug_info()
+            self._append_eval_debug_jsonl(debug_info)
+            frame = self._draw_eval_overlay(frame, debug_info)
+            self.eval_video_ffmpeg.stdin.write(frame.tobytes())
 
         self.take_action_cnt += 1
         print(f"step: \033[92m{self.take_action_cnt} / {self.step_lim}\033[0m", end="\r")

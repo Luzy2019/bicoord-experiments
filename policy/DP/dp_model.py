@@ -19,6 +19,9 @@ class DP:
         self.policy = self.get_policy(ckpt_file, None, "cuda:0")
         self._apply_runtime_speed_modulation()
         self.runner = DPRunner(output_dir=None)
+        self.policy_call_idx = 0
+        self.last_policy_debug = {}
+        self.current_eval_action = None
         self.debug_dir = os.environ.get("DP_FACTOR_DEBUG_DIR")
         self.debug_records = []
         self.debug_max_calls = int(os.environ.get("DP_FACTOR_DEBUG_MAX_CALLS", "20"))
@@ -31,18 +34,79 @@ class DP:
     
     def reset_obs(self):
         self.runner.reset_obs()
+        self.policy_call_idx = 0
+        self.last_policy_debug = {}
+        self.current_eval_action = None
 
     def get_action(self, observation=None):
         if self.debug_dir:
             setattr(self.policy, "factorized_debug_actions", len(self.debug_records) < self.debug_max_calls)
         action = self.runner.get_action(self.policy, observation)
+        self.last_policy_debug = self._build_policy_debug(action)
+        self.policy_call_idx += 1
         self._collect_factorized_debug()
         if self.debug_dir:
             setattr(self.policy, "factorized_debug_actions", False)
         return action
 
+    def set_current_eval_action(self, action, action_idx, chunk_len):
+        action = np.asarray(action, dtype=np.float32)
+        mid = action.shape[-1] // 2
+        self.current_eval_action = {
+            "chunk_step": int(action_idx),
+            "chunk_len": int(chunk_len),
+            "action": action,
+            "left_action": action[:mid],
+            "right_action": action[mid:],
+            "left_gripper": float(action[mid - 1]) if mid > 0 else None,
+            "right_gripper": float(action[-1]) if action.size > 0 else None,
+        }
+
+    def get_debug_overlay(self):
+        info = dict(self.last_policy_debug)
+        if self.current_eval_action is not None:
+            info.update(self.current_eval_action)
+        return self._json_safe(info)
+
     def get_last_obs(self):
         return self.runner.obs[-1]
+
+    def _build_policy_debug(self, action):
+        action_dict = getattr(self.runner, "last_action_dict", None) or {}
+        info = {
+            "policy_call_idx": int(self.policy_call_idx),
+            "n_obs_steps": int(getattr(self.policy, "n_obs_steps", self.runner.n_obs_steps)),
+            "n_action_steps": int(action.shape[0]),
+            "action_dim": int(action.shape[-1]) if action.ndim > 1 else int(action.shape[0]),
+            "speed_enabled": bool(getattr(self.policy, "speed_modulation_enabled", False)),
+            "speed_learned": bool(getattr(self.policy, "speed_modulation_learned", False)),
+            "speed_strength": float(getattr(self.policy, "speed_modulation_strength", 1.0)),
+            "speed_min": float(getattr(self.policy, "speed_modulation_min", 0.0)),
+            "speed_max": float(getattr(self.policy, "speed_modulation_max", 0.0)),
+            "action_chunk": np.asarray(action, dtype=np.float32),
+        }
+        for key in ("speed_alpha", "left_speed_alpha", "right_speed_alpha"):
+            if key in action_dict:
+                value = np.asarray(action_dict[key]).squeeze()
+                info[key] = value
+                info[f"{key}_mean"] = float(np.mean(value))
+                info[f"{key}_min"] = float(np.min(value))
+                info[f"{key}_max"] = float(np.max(value))
+        for key in ("action_pred", "action_pred_raw", "factorized_gates"):
+            if key in action_dict:
+                info[key] = np.asarray(action_dict[key]).squeeze()
+        return info
+
+    def _json_safe(self, value):
+        if isinstance(value, dict):
+            return {k: self._json_safe(v) for k, v in value.items()}
+        if isinstance(value, np.ndarray):
+            return value.tolist()
+        if isinstance(value, np.generic):
+            return value.item()
+        if isinstance(value, (list, tuple)):
+            return [self._json_safe(v) for v in value]
+        return value
 
     def get_policy(self, checkpoint, output_dir, device):
         # load checkpoint

@@ -1,1 +1,0 @@
-python scripts/process_data.py heat_food demo_clean 100

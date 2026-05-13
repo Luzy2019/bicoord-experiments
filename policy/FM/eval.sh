@@ -17,6 +17,7 @@ speed_modulation_min=${11:-0.5}
 speed_modulation_max=${12:-2.0}
 speed_modulation_smooth=${13:-3}
 speed_modulation_learned=${14:-true}
+checkpoint_num=${15:-400}
 DEBUG=False
 
 export CUDA_VISIBLE_DEVICES=${gpu_id}
@@ -31,6 +32,13 @@ else
     unset DP_SPEED_MODULATION_ENABLED
 fi
 echo -e "\033[33mspeed modulation: ${DP_SPEED_MODULATION_ENABLED}, learned=${DP_SPEED_MODULATION_LEARNED}, strength=${DP_SPEED_MODULATION_STRENGTH}, range=[${DP_SPEED_MODULATION_MIN}, ${DP_SPEED_MODULATION_MAX}], smooth=${DP_SPEED_MODULATION_SMOOTH}\033[0m"
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${script_dir}/../.." && pwd)"
+if [ "${factor_debug_dir}" != "none" ] && [[ "${factor_debug_dir}" != /* ]]; then
+    factor_debug_dir="${repo_root}/${factor_debug_dir}"
+fi
+
 if [ "${factor_debug_dir}" != "none" ]; then
     export DP_FACTOR_DEBUG_DIR="${factor_debug_dir}"
     export DP_FACTOR_DEBUG_MAX_CALLS="${factor_debug_max_calls}"
@@ -42,7 +50,7 @@ else
 fi
 echo -e "\033[33mgpu id (to use): ${gpu_id}\033[0m"
 
-cd ../..
+cd "${repo_root}"
 
 PYTHONWARNINGS=ignore::UserWarning \
 python script/eval_policy.py --config policy/$policy_name/deploy_policy.yml \
@@ -51,4 +59,5 @@ python script/eval_policy.py --config policy/$policy_name/deploy_policy.yml \
     --task_config ${task_config} \
     --ckpt_setting ${ckpt_setting} \
     --expert_data_num ${expert_data_num} \
-    --seed ${seed}
+    --seed ${seed} \
+    --checkpoint_num ${checkpoint_num}

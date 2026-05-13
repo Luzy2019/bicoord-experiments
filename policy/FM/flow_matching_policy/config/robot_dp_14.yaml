@@ -3,7 +3,7 @@ defaults:
   - _self_
 
 name: factorized_robot_${task.name}
-_target_: diffusion_policy.workspace.robotworkspace.RobotWorkspace
+_target_: flow_matching_policy.workspace.robotworkspace.RobotWorkspace
 
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}
@@ -19,25 +19,20 @@ keypoint_visible_rate: 1.0
 obs_as_global_cond: True
 
 policy:
-  _target_: diffusion_policy.policy.factorized_bimanual_diffusion_unet_image_policy.FactorizedBimanualDiffusionUnetImagePolicy
+  _target_: flow_matching_policy.policy.factorized_bimanual_diffusion_unet_image_policy.FactorizedBimanualDiffusionUnetImagePolicy
 
   shape_meta: ${shape_meta}
   
   noise_scheduler:
-    _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
+    _target_: flow_matching_policy.model.flow_matching.flow_matching_scheduler.FlowMatchingSchedulerConfig
     num_train_timesteps: 100
-    beta_start: 0.0001
-    beta_end: 0.02
-    beta_schedule: squaredcos_cap_v2
-    variance_type: fixed_small # Yilun's paper uses fixed_small_log instead, but easy to cause Nan
-    clip_sample: True # required when predict_epsilon=False
-    prediction_type: epsilon # or sample
+    path: rectified
 
   obs_encoder:
-    _target_: diffusion_policy.model.vision.multi_image_obs_encoder.MultiImageObsEncoder
+    _target_: flow_matching_policy.model.vision.multi_image_obs_encoder.MultiImageObsEncoder
     shape_meta: ${shape_meta}
     rgb_model:
-      _target_: diffusion_policy.model.vision.model_getter.get_resnet
+      _target_: flow_matching_policy.model.vision.model_getter.get_resnet
       name: resnet18
       weights: null
     resize_shape: null
@@ -84,11 +79,11 @@ policy:
   speed_modulation_coupling_risk_weight: 1.0
   speed_modulation_geometry_risk_weight: 0.25
 
-  # scheduler.step params
-  # predict_epsilon: True
+  # Flow matching uses linear interpolation x_t = (1-t) * x0 + t * x1
+  # and Euler integration during inference.
 
 ema:
-  _target_: diffusion_policy.model.diffusion.ema_model.EMAModel
+  _target_: flow_matching_policy.model.diffusion.ema_model.EMAModel
   update_after_step: 0
   inv_gamma: 1.0
   power: 0.75
@@ -145,7 +140,7 @@ training:
   tqdm_interval_sec: 1.0
 
 logging:
-  project: factorized_diffusion_policy_debug
+  project: factorized_flow_matching_policy_debug
   resume: True
   mode: online
   name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}

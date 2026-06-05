@@ -91,8 +91,8 @@ class BaseWorkspace:
             path = self.get_checkpoint_path(tag=tag)
         else:
             path = pathlib.Path(path)
-        payload = torch.load(path.open("rb"), pickle_module=dill)
-        self.load_payload(payload, exclude_keys=exclude_keys, include_keys=include_keys, **kwargs)
+        payload = torch.load(path.open("rb"), pickle_module=dill, **kwargs)
+        self.load_payload(payload, exclude_keys=exclude_keys, include_keys=include_keys)
         return payload
 
     @classmethod

@@ -1,5 +1,4 @@
 import numpy as np
-from pathlib import Path
 from .dp_model import DP
 
 def encode_obs(observation):
@@ -16,11 +15,8 @@ def encode_obs(observation):
 
 
 def get_model(usr_args):
-    ckpt_dir_name = usr_args.get("ckpt_dir_name")
-    if ckpt_dir_name is None:
-        ckpt_dir_name = f"{usr_args['task_name']}-{usr_args['ckpt_setting']}-{usr_args['expert_data_num']}-{usr_args['seed']}"
-    ckpt_file = Path(__file__).resolve().parent / "checkpoints" / ckpt_dir_name / f"{usr_args['checkpoint_num']}.ckpt"
-    return DP(str(ckpt_file))
+    ckpt_file = f"./checkpoints/DP/{usr_args['task_name']}-{usr_args['ckpt_setting']}-{usr_args['expert_data_num']}-{usr_args['seed']}/{usr_args['checkpoint_num']}.ckpt"
+    return DP(ckpt_file)
 
 
 def eval(TASK_ENV, model, observation):
@@ -35,9 +31,7 @@ def eval(TASK_ENV, model, observation):
     # ======== Get Action ========
     actions = model.get_action(obs)
 
-    for action_idx, action in enumerate(actions):
-        if hasattr(model, "set_current_eval_action"):
-            model.set_current_eval_action(action, action_idx, len(actions))
+    for action in actions:
         TASK_ENV.take_action(action)
         observation = TASK_ENV.get_obs()
         obs = encode_obs(observation)

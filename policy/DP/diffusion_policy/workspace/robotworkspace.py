@@ -66,17 +66,6 @@ class RobotWorkspace(BaseWorkspace):
             if lastest_ckpt_path.is_file():
                 print(f"Resuming from checkpoint {lastest_ckpt_path}")
                 self.load_checkpoint(path=lastest_ckpt_path)
-        init_ckpt_path = cfg.training.get("init_ckpt_path", None)
-        if init_ckpt_path and not cfg.training.resume:
-            print(f"Initializing model weights from checkpoint {init_ckpt_path}")
-            self.load_checkpoint(
-                path=init_ckpt_path,
-                exclude_keys=("optimizer",),
-                include_keys=(),
-                strict=False,
-            )
-            self.global_step = 0
-            self.epoch = 0
 
         # configure dataset
         dataset: BaseImageDataset
@@ -200,8 +189,6 @@ class RobotWorkspace(BaseWorkspace):
                             "epoch": self.epoch,
                             "lr": lr_scheduler.get_last_lr()[0],
                         }
-                        if hasattr(self.model, "last_loss_dict"):
-                            step_log.update(self.model.last_loss_dict)
 
                         is_last_batch = batch_idx == (len(train_dataloader) - 1)
                         if not is_last_batch:
@@ -274,11 +261,8 @@ class RobotWorkspace(BaseWorkspace):
                 # checkpoint
                 if ((self.epoch + 1) % cfg.training.checkpoint_every) == 0:
                     # checkpointing
-                    checkpoint_dir_name = cfg.training.get("checkpoint_dir_name", None)
-                    if checkpoint_dir_name is None:
-                        save_name = pathlib.Path(self.cfg.task.dataset.zarr_path).stem
-                        checkpoint_dir_name = f"{save_name}-{seed}"
-                    self.save_checkpoint(f"checkpoints/{checkpoint_dir_name}/{self.epoch + 1}.ckpt")  # TODO
+                    save_name = pathlib.Path(self.cfg.task.dataset.zarr_path).stem
+                    self.save_checkpoint(f"checkpoints/{save_name}-{seed}/{self.epoch + 1}.ckpt")  # TODO
 
                 # ========= eval end for this epoch ==========
                 policy.train()

@@ -11,12 +11,6 @@ from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1
 from diffusion_policy.model.diffusion.mask_generator import LowdimMaskGenerator
 from diffusion_policy.model.vision.multi_image_obs_encoder import MultiImageObsEncoder
 from diffusion_policy.common.pytorch_util import dict_apply
-from diffusion_policy.policy.speed_modulation import (
-    SpeedModulationHead,
-    compute_speed_alpha,
-    speed_modulation_loss,
-    warp_action_sequence,
-)
 
 
 class DiffusionUnetImagePolicy(BaseImagePolicy):
@@ -36,20 +30,6 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
         kernel_size=5,
         n_groups=8,
         cond_predict_scale=True,
-        speed_modulation_enabled=False,
-        speed_modulation_strength=1.0,
-        speed_modulation_min=0.5,
-        speed_modulation_max=2.0,
-        speed_modulation_smooth=3,
-        speed_modulation_learned=True,
-        speed_modulation_hidden_dim=128,
-        speed_modulation_loss_weight=0.01,
-        speed_modulation_target_weight=1.0,
-        speed_modulation_smooth_weight=0.1,
-        speed_modulation_fast_weight=0.01,
-        speed_modulation_risk_weight=0.1,
-        speed_modulation_detach_signal=True,
-        speed_modulation_train_only=False,
         # parameters passed to step
         **kwargs,
     ):
@@ -98,31 +78,6 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
         self.n_obs_steps = n_obs_steps
         self.obs_as_global_cond = obs_as_global_cond
         self.kwargs = kwargs
-        self.speed_modulation_enabled = bool(speed_modulation_enabled)
-        self.speed_modulation_strength = float(speed_modulation_strength)
-        self.speed_modulation_min = float(speed_modulation_min)
-        self.speed_modulation_max = float(speed_modulation_max)
-        self.speed_modulation_smooth = int(speed_modulation_smooth)
-        self.speed_modulation_learned = bool(speed_modulation_learned)
-        self.speed_modulation_loss_weight = float(speed_modulation_loss_weight)
-        self.speed_modulation_target_weight = float(speed_modulation_target_weight)
-        self.speed_modulation_smooth_weight = float(speed_modulation_smooth_weight)
-        self.speed_modulation_fast_weight = float(speed_modulation_fast_weight)
-        self.speed_modulation_risk_weight = float(speed_modulation_risk_weight)
-        self.speed_modulation_detach_signal = bool(speed_modulation_detach_signal)
-        self.speed_modulation_train_only = bool(speed_modulation_train_only)
-        self.speed_head = SpeedModulationHead(
-            action_dim=action_dim,
-            cond_dim=0 if global_cond_dim is None else global_cond_dim,
-            hidden_dim=int(speed_modulation_hidden_dim),
-            alpha_min=self.speed_modulation_min,
-            alpha_max=self.speed_modulation_max,
-            init_alpha=1.0,
-        )
-        self.last_speed_alpha = None
-        self.last_action_pred_raw = None
-        self.last_denoise_output = None
-        self.last_loss_dict = {}
 
         if num_inference_steps is None:
             num_inference_steps = noise_scheduler.config.num_train_timesteps
@@ -158,7 +113,6 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
 
             # 2. predict model output
             model_output = model(trajectory, t, local_cond=local_cond, global_cond=global_cond)
-            self.last_denoise_output = model_output.detach()
 
             # 3. compute previous image: x_t -> x_t-1
             trajectory = scheduler.step(model_output, t, trajectory, generator=generator, **kwargs).prev_sample
@@ -222,25 +176,6 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
         # unnormalize prediction
         naction_pred = nsample[..., :Da]
         action_pred = self.normalizer["action"].unnormalize(naction_pred)
-        self.last_action_pred_raw = action_pred.detach()
-        if self.speed_modulation_enabled and self.last_denoise_output is not None:
-            if self.speed_modulation_learned:
-                speed_alpha = self.speed_head(
-                    self.last_denoise_output[..., :Da],
-                    torch.zeros(B, dtype=torch.long, device=device),
-                    global_cond=global_cond,
-                    num_train_timesteps=self.noise_scheduler.config.num_train_timesteps,
-                )
-            else:
-                speed_alpha = compute_speed_alpha(
-                    self.last_denoise_output[..., :Da],
-                    strength=self.speed_modulation_strength,
-                    alpha_min=self.speed_modulation_min,
-                    alpha_max=self.speed_modulation_max,
-                    smooth_kernel=self.speed_modulation_smooth,
-                )
-            self.last_speed_alpha = speed_alpha.detach()
-            action_pred = warp_action_sequence(action_pred, speed_alpha)
 
         # get action
         start = To - 1
@@ -248,9 +183,6 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
         action = action_pred[:, start:end]
 
         result = {"action": action, "action_pred": action_pred}
-        if self.last_speed_alpha is not None:
-            result["speed_alpha"] = self.last_speed_alpha
-            result["action_pred_raw"] = self.last_action_pred_raw
         return result
 
     # ========= training  ============
@@ -276,8 +208,6 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
             nobs_features = self.obs_encoder(this_nobs)
             # reshape back to B, Do
             global_cond = nobs_features.reshape(batch_size, -1)
-            if self.speed_modulation_train_only:
-                global_cond = global_cond.detach()
         else:
             # reshape B, T, ... to B*T
             this_nobs = dict_apply(nobs, lambda x: x.reshape(-1, *x.shape[2:]))
@@ -311,11 +241,7 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
         noisy_trajectory[condition_mask] = cond_data[condition_mask]
 
         # Predict the noise residual
-        if self.speed_modulation_train_only:
-            with torch.no_grad():
-                pred = self.model(noisy_trajectory, timesteps, local_cond=local_cond, global_cond=global_cond)
-        else:
-            pred = self.model(noisy_trajectory, timesteps, local_cond=local_cond, global_cond=global_cond)
+        pred = self.model(noisy_trajectory, timesteps, local_cond=local_cond, global_cond=global_cond)
 
         pred_type = self.noise_scheduler.config.prediction_type
         if pred_type == "epsilon":
@@ -328,30 +254,5 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
         loss = F.mse_loss(pred, target, reduction="none")
         loss = loss * loss_mask.type(loss.dtype)
         loss = reduce(loss, "b ... -> b (...)", "mean")
-        diffusion_loss = loss.mean()
-        total_loss = diffusion_loss * 0.0 if self.speed_modulation_train_only else diffusion_loss
-        self.last_loss_dict = {"diffusion_loss": float(diffusion_loss.detach().cpu())}
-        if self.speed_modulation_enabled and self.speed_modulation_learned and self.speed_modulation_loss_weight > 0:
-            speed_signal = pred.detach() if self.speed_modulation_detach_signal else pred
-            speed_alpha = self.speed_head(
-                speed_signal[..., :self.action_dim],
-                timesteps,
-                global_cond=global_cond,
-                num_train_timesteps=self.noise_scheduler.config.num_train_timesteps,
-            )
-            speed_loss, speed_loss_dict = speed_modulation_loss(
-                alpha=speed_alpha,
-                actions=nactions,
-                alpha_min=self.speed_modulation_min,
-                alpha_max=self.speed_modulation_max,
-                target_weight=self.speed_modulation_target_weight,
-                smooth_weight=self.speed_modulation_smooth_weight,
-                fast_weight=self.speed_modulation_fast_weight,
-                risk_weight=self.speed_modulation_risk_weight,
-            )
-            total_loss = total_loss + self.speed_modulation_loss_weight * speed_loss
-            self.last_loss_dict.update({
-                "speed_modulation_loss": float(speed_loss.detach().cpu()),
-                **{key: float(value.detach().cpu()) for key, value in speed_loss_dict.items()},
-            })
-        return total_loss
+        loss = loss.mean()
+        return loss

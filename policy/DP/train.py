@@ -37,12 +37,6 @@ def get_camera_config(camera_type):
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
 
-def set_rgb_obs_shape(shape_meta, image_shape):
-    for obs_name, obs_meta in shape_meta.obs.items():
-        if obs_meta.get("type") == "rgb":
-            obs_meta.shape = image_shape
-
-
 @hydra.main(
     version_base=None,
     config_path=str(pathlib.Path(__file__).parent.joinpath("diffusion_policy", "config")),
@@ -52,16 +46,19 @@ def main(cfg: OmegaConf):
     # will use the same time.
     head_camera_type = cfg.head_camera_type
     head_camera_cfg = get_camera_config(head_camera_type)
-    image_shape = [
+    cfg.task.image_shape = [3, head_camera_cfg["h"], head_camera_cfg["w"]]
+    cfg.task.shape_meta.obs.head_cam.shape = [
         3,
         head_camera_cfg["h"],
         head_camera_cfg["w"],
     ]
-    cfg.task.image_shape = image_shape
-    set_rgb_obs_shape(cfg.task.shape_meta, image_shape)
     OmegaConf.resolve(cfg)
-    cfg.task.image_shape = image_shape
-    set_rgb_obs_shape(cfg.task.shape_meta, image_shape)
+    cfg.task.image_shape = [3, head_camera_cfg["h"], head_camera_cfg["w"]]
+    cfg.task.shape_meta.obs.head_cam.shape = [
+        3,
+        head_camera_cfg["h"],
+        head_camera_cfg["w"],
+    ]
 
     cls = hydra.utils.get_class(cfg._target_)
     workspace: BaseWorkspace = cls(cfg)

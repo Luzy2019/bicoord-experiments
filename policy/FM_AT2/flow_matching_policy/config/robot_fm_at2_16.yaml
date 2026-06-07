@@ -1,0 +1,225 @@
+defaults:
+  - task: default_task_16
+  - _self_
+
+name: coupling_scheduled_fm_at2_kl_robot_${task.name}
+_target_: flow_matching_policy.workspace.robotworkspace.RobotWorkspace
+
+task_name: ${task.name}
+shape_meta: ${task.shape_meta}
+exp_name: "coupling_scheduled_fm_at2_kl"
+
+horizon: 12
+n_obs_steps: 3
+n_action_steps: 10
+n_latency_steps: 0
+dataset_obs_steps: ${n_obs_steps}
+past_action_visible: False
+keypoint_visible_rate: 1.0
+obs_as_global_cond: True
+
+policy:
+  _target_: flow_matching_policy.policy.coupling_scheduled_flow_unet_image_policy.CouplingScheduledFlowUnetImagePolicy
+
+  shape_meta: ${shape_meta}
+
+  noise_scheduler:
+    _target_: flow_matching_policy.model.flow_matching.flow_matching_scheduler.FlowMatchingSchedulerConfig
+    num_train_timesteps: 100
+    path: rectified
+
+  obs_encoder:
+    _target_: flow_matching_policy.model.vision.multi_image_obs_encoder.MultiImageObsEncoder
+    shape_meta: ${shape_meta}
+    rgb_model:
+      _target_: flow_matching_policy.model.vision.model_getter.get_resnet
+      name: resnet18
+      weights: null
+    resize_shape: null
+    crop_shape: null
+    random_crop: True
+    use_group_norm: True
+    share_rgb_model: False
+    imagenet_norm: True
+
+  horizon: ${horizon}
+  n_action_steps: ${eval:'${n_action_steps}+${n_latency_steps}'}
+  n_obs_steps: ${n_obs_steps}
+  num_inference_steps: 100
+  obs_as_global_cond: ${obs_as_global_cond}
+  diffusion_step_embed_dim: 128
+  down_dims: [256, 512, 1024]
+  kernel_size: 5
+  n_groups: 8
+  cond_predict_scale: True
+
+  # Action-only generation. Compact timing is produced by the external
+  # coupling-aware scheduler, not by generated time channels. Coupling is
+  # estimated with KL between conditional and marginal action distributions.
+  left_action_dim: null
+  right_action_dim: null
+  left_action_start: 0
+  right_action_start: null
+
+  coupling_enabled: True
+  coupling_aux_loss_weight: 2.5e-1
+
+  scheduler_enabled: True
+  scheduler_num_samples: 16
+  scheduler_lambda_time: 1.0e-1
+  scheduler_dependency_weight: 1.0
+  scheduler_dynamics_weight: 2.5e-1
+  scheduler_risk_weight: 1.0
+  scheduler_min_duration_scale: 0.5
+  scheduler_max_duration_scale: 1.0
+  scheduler_max_offset_scale: 0.25
+  scheduler_mode: dag
+  dag_coupling_threshold: 5.0e-2
+  dag_direction_margin: 2.0e-2
+  dag_precedence_fraction: 1.0
+  dag_sync_weight: 1.0
+  dag_critical_weight: 5.0e-1
+  dag_critical_tau: 5.0e-2
+
+  action_rerank_samples: 4
+
+  energy_loss_weight: 1.0e-2
+  energy_hidden_dim: 256
+  energy_margin: 1.0
+  preference_improve_margin: 1.0e-1
+  preference_bad_margin: 1.0
+  preference_demo_weight: 1.0
+  preference_compactness_weight: 1.0
+  preference_dag_weight: 1.0
+  preference_dynamics_weight: 1.0
+  preference_phase_weight: 1.0
+  reward_weight_temperature: 1.0
+  rl_self_imitation_weight: 1.0e-1
+  rl_ppo_reranker_weight: 5.0e-2
+  rl_bc_anchor_weight: 1.0
+  rl_ppo_clip: 2.0e-1
+  rl_candidate_temperature: 1.0
+  world_model_enabled: True
+  world_model_loss_weight: 5.0e-2
+  world_model_gaussian_weight: 1.0e-2
+  world_model_latent_dim: 128
+  world_model_hidden_dim: 256
+
+ema:
+  _target_: flow_matching_policy.model.diffusion.ema_model.EMAModel
+  update_after_step: 0
+  inv_gamma: 1.0
+  power: 0.75
+  min_value: 0.0
+  max_value: 0.9999
+
+dataloader:
+  batch_size: 64
+  num_workers: 0
+  shuffle: True
+  pin_memory: True
+  persistent_workers: False
+
+val_dataloader:
+  batch_size: 64
+  num_workers: 0
+  shuffle: False
+  pin_memory: True
+  persistent_workers: False
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1.0e-4
+  betas: [0.95, 0.999]
+  eps: 1.0e-8
+  weight_decay: 1.0e-6
+
+training:
+  device: "cuda:0"
+  seed: 100
+  debug: False
+  resume: False
+  init_ckpt_path: null
+  checkpoint_dir_name: null
+  stage: bc
+  lr_scheduler: cosine
+  lr_warmup_steps: 500
+  num_epochs: 600
+  gradient_accumulate_every: 1
+  use_ema: True
+  freeze_encoder: False
+  rollout_every: 50
+  checkpoint_every: 50
+  val_every: 1
+  sample_every: 5
+  max_train_steps: null
+  max_val_steps: null
+  tqdm_interval_sec: 1.0
+
+rl:
+  enabled: False
+  env_backend: isaaclab
+  env_id: null
+  env_kwargs: null
+  execute_compact_schedule: auto
+  rollout_episodes_per_epoch: 4
+  updates_per_epoch: 1
+  batch_size: 16
+  max_episode_steps: 300
+  replay_capacity: 2048
+  gamma: 0.99
+  reward:
+    success_bonus: 10.0
+    phase_delta_bonus: 3.0
+    early_phase_bonus: 2.0
+    time_weight: 1.0e-2
+    makespan_weight: 1.0
+    dag_weight: 1.0
+    dynamics_weight: 5.0e-1
+    speed_weight: 2.0e-1
+    speed_limit: 2.0
+    collision_weight: 10.0
+    failure_penalty: 5.0
+
+logging:
+  project: coupling_scheduled_flow_matching_at2_kl_policy_debug
+  resume: True
+  mode: online
+  name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+  tags: ["${name}", "${task_name}", "${exp_name}"]
+  id: null
+  group: null
+
+checkpoint:
+  topk:
+    monitor_key: test_mean_score
+    mode: max
+    k: 5
+    format_str: 'epoch={epoch:04d}-test_mean_score={test_mean_score:.3f}.ckpt'
+  save_last_ckpt: True
+  save_last_snapshot: False
+
+multi_run:
+  run_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  wandb_name_base: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+
+hydra:
+  job:
+    override_dirname: ${name}
+  run:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  sweep:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+    subdir: ${hydra.job.num}
+
+task:
+  name: stack_bowls
+  dataset:
+    zarr_path: data/${task.name}-${setting}-${expert_data_num}.zarr
+
+setting: demo_clean
+expert_data_num: 50
+head_camera_type: D435
+
+runtime:
+  gpu_id: 0

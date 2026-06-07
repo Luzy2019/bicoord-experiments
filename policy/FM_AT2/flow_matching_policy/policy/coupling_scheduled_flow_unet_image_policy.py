@@ -418,7 +418,12 @@ class BimanualCouplingEstimator(nn.Module):
 
 
 class CompactScheduler:
-    """Generic coupling-aware schedule search without alpha, gates, or action warping."""
+    """Generic coupling-aware schedule search without alpha, gates, or action warping.
+
+    这个调度器不改变动作本身，只为左右臂每个 action step 搜索开始时间
+    `schedule` 和持续时间 `durations`。搜索目标是让总耗时短、左右臂依赖
+    冲突少、动作速度不过激，并避开高风险候选。
+    """
 
     def __init__(
         self,
@@ -432,21 +437,23 @@ class CompactScheduler:
         max_duration_scale: float = 1.0,
         max_offset_scale: float = 0.25,
     ):
-        self.enabled = bool(enabled)
-        self.num_samples = max(int(num_samples), 1)
-        self.lambda_time = float(lambda_time)
-        self.dependency_weight = float(dependency_weight)
-        self.dynamics_weight = float(dynamics_weight)
-        self.risk_weight = float(risk_weight)
-        self.min_duration_scale = float(min_duration_scale)
-        self.max_duration_scale = float(max_duration_scale)
-        self.max_offset_scale = float(max_offset_scale)
+        self.enabled = bool(enabled)  # 是否启用随机 compact schedule 搜索。
+        self.num_samples = max(int(num_samples), 1)  # 每个 batch 样本尝试多少组随机调度候选。
+        self.lambda_time = float(lambda_time)  # makespan 总完成时间的权重。
+        self.dependency_weight = float(dependency_weight)  # 左右臂依赖/同步冲突代价的权重。
+        self.dynamics_weight = float(dynamics_weight)  # 动作变化除以持续时间得到的动态代价权重。
+        self.risk_weight = float(risk_weight)  # preference/world-model 风险分数的权重。
+        self.min_duration_scale = float(min_duration_scale)  # 随机候选的最短 duration 比例。
+        self.max_duration_scale = float(max_duration_scale)  # 随机候选的最长 duration 比例。
+        self.max_offset_scale = float(max_offset_scale)  # 左右臂整体起点随机偏移的最大比例。
 
     def _linear_schedule(self, batch_size: int, horizon: int, device, dtype) -> torch.Tensor:
+        # 生成均匀递增的基础时间轴，范围大致是 [0, 1)。
         base = torch.arange(horizon, device=device, dtype=dtype) / max(horizon, 1)
+        # 扩展成 [B, H, 2]，最后一维 2 分别表示 left/right 的 start time。
         return base.view(1, horizon, 1).expand(batch_size, horizon, 2)
 
-    # 修改：serach可能也要该，目前是软惩罚搜索，可能要改成利用DAG进行搜索
+    # 普通版本使用 soft penalty 搜索：不显式建图，只根据 coupling score 惩罚左右臂顺序/同步冲突。
     def search(
         self,
         actions: torch.Tensor,
@@ -456,118 +463,124 @@ class CompactScheduler:
         left_slice: slice,
         right_slice: slice,
     ) -> Dict[str, torch.Tensor]:
-        batch_size, horizon = actions.shape[:2]
-        device = actions.device
-        dtype = actions.dtype
-        risk = F.softplus(energy_scores) + F.softplus(wm_scores)
+        batch_size, horizon = actions.shape[:2]  # B 是 batch size，H 是 action horizon。
+        device = actions.device  # 后续新 tensor 都放在同一个 device 上。
+        dtype = actions.dtype  # 后续新 tensor 都使用动作张量的 dtype。
+        risk = F.softplus(energy_scores) + F.softplus(wm_scores)  # 将偏好能量和 world-model 分数转为非负风险。
         if (not self.enabled) or horizon <= 1:
+            # 关闭搜索或只有 1 步时，直接返回线性 schedule 作为 fallback。
             schedule = self._linear_schedule(batch_size, horizon, device, dtype)
-            base_dt = actions.new_tensor(1.0 / max(horizon, 1))
-            durations = torch.ones((batch_size, horizon, 2), device=device, dtype=dtype) * base_dt
-            ends = schedule + durations
-            speed_scale = torch.ones_like(durations)
-            makespan = torch.ones(batch_size, device=device, dtype=dtype)
-            zero = torch.zeros(batch_size, device=device, dtype=dtype)
-            total = self.risk_weight * risk + self.lambda_time * makespan
+            base_dt = actions.new_tensor(1.0 / max(horizon, 1))  # 每一步默认持续 1/H。
+            durations = torch.ones((batch_size, horizon, 2), device=device, dtype=dtype) * base_dt  # 左右臂同样 duration。
+            ends = schedule + durations  # 每步结束时间 = 开始时间 + 持续时间。
+            speed_scale = torch.ones_like(durations)  # fallback 不压缩/拉伸速度。
+            makespan = torch.ones(batch_size, device=device, dtype=dtype)  # 线性 schedule 的总时长近似为 1。
+            zero = torch.zeros(batch_size, device=device, dtype=dtype)  # fallback 下没有依赖或动态附加代价。
+            total = self.risk_weight * risk + self.lambda_time * makespan  # fallback 总代价只含风险和时间。
             return {
-                "schedule": schedule,
-                "durations": durations,
-                "ends": ends,
-                "speed_scale": speed_scale,
-                "makespan": makespan,
-                "dependency_cost": zero,
-                "dynamics_cost": zero,
-                "risk_cost": risk,
-                "total_cost": total,
-                "dag_precedence_cost": zero,
-                "dag_sync_cost": zero,
-                "dag_critical_cost": zero,
-                "dag_dependency_cost": zero,
-                "dag_edge_count": zero,
-                "dag_slack": torch.zeros(batch_size, horizon, 2, device=device, dtype=dtype),
-                "dag_criticality": torch.zeros(batch_size, horizon, 2, device=device, dtype=dtype),
+                "schedule": schedule,  # [B, H, 2] 左右臂每步开始时间。
+                "durations": durations,  # [B, H, 2] 左右臂每步持续时间。
+                "ends": ends,  # [B, H, 2] 左右臂每步结束时间。
+                "speed_scale": speed_scale,  # [B, H, 2] 相对基础速度的缩放。
+                "makespan": makespan,  # [B] 整段双臂计划完成时间。
+                "dependency_cost": zero,  # [B] 普通依赖代价。
+                "dynamics_cost": zero,  # [B] 动态/速度平滑代价。
+                "risk_cost": risk,  # [B] 动作候选本身的风险。
+                "total_cost": total,  # [B] 用于候选重排序的总 cost。
+                "dag_precedence_cost": zero,  # 兼容 DAG 版本的返回字段。
+                "dag_sync_cost": zero,  # 兼容 DAG 版本的返回字段。
+                "dag_critical_cost": zero,  # 兼容 DAG 版本的返回字段。
+                "dag_dependency_cost": zero,  # 兼容 DAG 版本的返回字段。
+                "dag_edge_count": zero,  # 兼容 DAG 版本的返回字段。
+                "dag_slack": torch.zeros(batch_size, horizon, 2, device=device, dtype=dtype),  # 兼容 DAG 的 slack。
+                "dag_criticality": torch.zeros(batch_size, horizon, 2, device=device, dtype=dtype),  # 兼容 DAG 的 criticality。
             }
 
-        num = self.num_samples
-        base_dt = actions.new_tensor(1.0 / horizon)
+        num = self.num_samples  # 随机调度候选数量。
+        base_dt = actions.new_tensor(1.0 / horizon)  # 未压缩时每一步的基础 duration。
         scales = torch.empty(num, batch_size, horizon, 2, device=device, dtype=dtype).uniform_(
             self.min_duration_scale,
             self.max_duration_scale,
-        )
-        scales[0].fill_(1.0)
-        durations = base_dt * scales
+        )  # 为每个候选、样本、时间步、左右臂随机采样 duration scale。
+        scales[0].fill_(1.0)  # 第 0 个候选固定为原始线性 duration，保证有稳定 baseline。
+        durations = base_dt * scales  # 将 scale 转成实际 duration。
         offsets = torch.empty(num, batch_size, 1, 2, device=device, dtype=dtype).uniform_(
             0.0,
             self.max_offset_scale / horizon,
-        )
-        offsets[0].zero_()
+        )  # 为左右臂起点加入小随机 offset，允许整体错开。
+        offsets[0].zero_()  # baseline 候选不加 offset。
         starts = offsets + torch.cumsum(
             torch.cat([torch.zeros_like(durations[:, :, :1]), durations[:, :, :-1]], dim=2),
             dim=2,
-        )
-        left_start = starts[..., 0]
-        right_start = starts[..., 1]
-        left_end = left_start + durations[..., 0]
-        right_end = right_start + durations[..., 1]
-        makespan = torch.maximum(left_end[:, :, -1], right_end[:, :, -1])
+        )  # 累加前面所有 duration，得到每个 step 的开始时间。
+        left_start = starts[..., 0]  # [N, B, H] 左臂开始时间。
+        right_start = starts[..., 1]  # [N, B, H] 右臂开始时间。
+        left_end = left_start + durations[..., 0]  # [N, B, H] 左臂结束时间。
+        right_end = right_start + durations[..., 1]  # [N, B, H] 右臂结束时间。
+        makespan = torch.maximum(left_end[:, :, -1], right_end[:, :, -1])  # [N, B] 双臂最后完成时间。
 
-        l_to_r = coupling_scores[..., 0].unsqueeze(0)
-        r_to_l = coupling_scores[..., 1].unsqueeze(0)
-        violation_l_to_r = F.relu(left_start - right_start)
-        violation_r_to_l = F.relu(right_start - left_start)
-        sync_weight = torch.minimum(l_to_r, r_to_l)
+        l_to_r = coupling_scores[..., 0].unsqueeze(0)  # [1, B, H] 左影响右/左先右后的耦合强度。
+        r_to_l = coupling_scores[..., 1].unsqueeze(0)  # [1, B, H] 右影响左/右先左后的耦合强度。
+        violation_l_to_r = F.relu(left_start - right_start)  # 如果左应先于右但左开始更晚，就产生违反量。
+        violation_r_to_l = F.relu(right_start - left_start)  # 如果右应先于左但右开始更晚，就产生违反量。
+        sync_weight = torch.minimum(l_to_r, r_to_l)  # 双向都强时，倾向于左右臂同步开始。
         dependency_cost = (
             l_to_r * violation_l_to_r
             + r_to_l * violation_r_to_l
             + sync_weight * (left_start - right_start).abs()
-        ).mean(dim=-1)
+        ).mean(dim=-1)  # [N, B] 对所有 step 平均后的左右臂依赖代价。
 
-        left_actions = actions[:, :, left_slice]
-        right_actions = actions[:, :, right_slice]
-        left_delta = torch.cat([left_actions[:, :1] * 0.0, left_actions[:, 1:] - left_actions[:, :-1]], dim=1)
-        right_delta = torch.cat([right_actions[:, :1] * 0.0, right_actions[:, 1:] - right_actions[:, :-1]], dim=1)
-        left_motion = left_delta.pow(2).mean(dim=-1).unsqueeze(0)
-        right_motion = right_delta.pow(2).mean(dim=-1).unsqueeze(0)
+        left_actions = actions[:, :, left_slice]  # 取出左臂动作维度。
+        right_actions = actions[:, :, right_slice]  # 取出右臂动作维度。
+        left_delta = torch.cat([left_actions[:, :1] * 0.0, left_actions[:, 1:] - left_actions[:, :-1]], dim=1)  # 左臂相邻 step 动作变化。
+        right_delta = torch.cat([right_actions[:, :1] * 0.0, right_actions[:, 1:] - right_actions[:, :-1]], dim=1)  # 右臂相邻 step 动作变化。
+        left_motion = left_delta.pow(2).mean(dim=-1).unsqueeze(0)  # [1, B, H] 左臂动作变化强度。
+        right_motion = right_delta.pow(2).mean(dim=-1).unsqueeze(0)  # [1, B, H] 右臂动作变化强度。
         dynamics_cost = (
             left_motion / durations[..., 0].clamp_min(1.0e-4)
             + right_motion / durations[..., 1].clamp_min(1.0e-4)
-        ).mean(dim=-1)
+        ).mean(dim=-1)  # duration 越短、动作变化越大，动态代价越高。
 
-        risk_cost = risk.unsqueeze(0).expand(num, -1)
+        risk_cost = risk.unsqueeze(0).expand(num, -1)  # [N, B] 同一个动作候选的风险复制到每个 schedule 候选。
         total = (
             self.lambda_time * makespan
             + self.dependency_weight * dependency_cost
             + self.dynamics_weight * dynamics_cost
             + self.risk_weight * risk_cost
-        )
-        best_idx = total.argmin(dim=0)
-        batch_idx = torch.arange(batch_size, device=device)
-        best_starts = starts[best_idx, batch_idx]
-        best_durations = durations[best_idx, batch_idx]
-        best_ends = best_starts + best_durations
-        best_speed_scale = base_dt / best_durations.clamp_min(1.0e-4)
+        )  # [N, B] 每个 schedule 候选的综合 cost。
+        best_idx = total.argmin(dim=0)  # [B] 每个 batch 样本选择 cost 最小的候选编号。
+        batch_idx = torch.arange(batch_size, device=device)  # 用于从 [N, B, ...] 中按样本 gather。
+        best_starts = starts[best_idx, batch_idx]  # [B, H, 2] 最优开始时间。
+        best_durations = durations[best_idx, batch_idx]  # [B, H, 2] 最优持续时间。
+        best_ends = best_starts + best_durations  # [B, H, 2] 最优结束时间。
+        best_speed_scale = base_dt / best_durations.clamp_min(1.0e-4)  # duration 越短，速度缩放越大。
         return {
-            "schedule": best_starts,
-            "durations": best_durations,
-            "ends": best_ends,
-            "speed_scale": best_speed_scale,
-            "makespan": makespan[best_idx, batch_idx],
-            "dependency_cost": dependency_cost[best_idx, batch_idx],
-            "dynamics_cost": dynamics_cost[best_idx, batch_idx],
-            "risk_cost": risk,
-            "total_cost": total[best_idx, batch_idx],
-            "dag_precedence_cost": dependency_cost[best_idx, batch_idx],
-            "dag_sync_cost": torch.zeros(batch_size, device=device, dtype=dtype),
-            "dag_critical_cost": torch.zeros(batch_size, device=device, dtype=dtype),
-            "dag_dependency_cost": dependency_cost[best_idx, batch_idx],
-            "dag_edge_count": torch.zeros(batch_size, device=device, dtype=dtype),
-            "dag_slack": torch.zeros(batch_size, horizon, 2, device=device, dtype=dtype),
-            "dag_criticality": torch.zeros(batch_size, horizon, 2, device=device, dtype=dtype),
+            "schedule": best_starts,  # 最优左右臂开始时间。
+            "durations": best_durations,  # 最优左右臂持续时间。
+            "ends": best_ends,  # 最优左右臂结束时间。
+            "speed_scale": best_speed_scale,  # 最优速度缩放。
+            "makespan": makespan[best_idx, batch_idx],  # 最优方案总完成时间。
+            "dependency_cost": dependency_cost[best_idx, batch_idx],  # 最优方案依赖代价。
+            "dynamics_cost": dynamics_cost[best_idx, batch_idx],  # 最优方案动态代价。
+            "risk_cost": risk,  # 动作候选风险，和 schedule 无关。
+            "total_cost": total[best_idx, batch_idx],  # 最优综合代价。
+            "dag_precedence_cost": dependency_cost[best_idx, batch_idx],  # 普通版本把 soft dependency 当作 precedence 兼容字段。
+            "dag_sync_cost": torch.zeros(batch_size, device=device, dtype=dtype),  # 普通版本没有单独 DAG 同步代价。
+            "dag_critical_cost": torch.zeros(batch_size, device=device, dtype=dtype),  # 普通版本没有关键路径代价。
+            "dag_dependency_cost": dependency_cost[best_idx, batch_idx],  # 兼容 DAG 版本的依赖总代价。
+            "dag_edge_count": torch.zeros(batch_size, device=device, dtype=dtype),  # 普通版本没有显式边。
+            "dag_slack": torch.zeros(batch_size, horizon, 2, device=device, dtype=dtype),  # 普通版本没有 slack。
+            "dag_criticality": torch.zeros(batch_size, horizon, 2, device=device, dtype=dtype),  # 普通版本没有 criticality。
         }
 
 
 class DAGCompactScheduler(CompactScheduler):
-    """DAG-style compact schedule search with precedence and sync costs."""
+    """DAG-style compact schedule search with precedence and sync costs.
+
+    这个版本会先把 coupling score 离散成三类边：
+    左先右、右先左、左右同步。之后在随机 schedule 候选上计算 DAG 约束
+    违反量、同步代价、关键约束代价，再选总代价最低的候选。
+    """
 
     def __init__(
         self,
@@ -587,6 +600,7 @@ class DAGCompactScheduler(CompactScheduler):
         critical_weight: float = 0.5,
         critical_tau: float = 0.05,
     ):
+        # 复用普通 CompactScheduler 的采样数量、时间、依赖、动态、风险等基础配置。
         super().__init__(
             enabled=enabled,
             num_samples=num_samples,
@@ -598,58 +612,58 @@ class DAGCompactScheduler(CompactScheduler):
             max_duration_scale=max_duration_scale,
             max_offset_scale=max_offset_scale,
         )
-        self.coupling_threshold = float(coupling_threshold)
-        self.direction_margin = float(direction_margin)
-        self.precedence_fraction = float(precedence_fraction)
-        self.sync_weight = float(sync_weight)
-        self.critical_weight = float(critical_weight)
-        self.critical_tau = max(float(critical_tau), 1.0e-6)
+        self.coupling_threshold = float(coupling_threshold)  # coupling 超过该阈值才认为存在依赖边。
+        self.direction_margin = float(direction_margin)  # 两个方向差距超过 margin 才判为单向边。
+        self.precedence_fraction = float(precedence_fraction)  # 前驱动作至少执行多少比例后，后继才适合开始。
+        self.sync_weight = float(sync_weight)  # 同步边的额外权重。
+        self.critical_weight = float(critical_weight)  # 接近关键约束时违反量的额外权重。
+        self.critical_tau = max(float(critical_tau), 1.0e-6)  # criticality 指数衰减温度，避免除零。
 
     def _edge_masks(self, coupling_scores: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        l_to_r = coupling_scores[..., 0]
-        r_to_l = coupling_scores[..., 1]
-        lr_edge = (l_to_r > self.coupling_threshold) & (l_to_r > r_to_l + self.direction_margin)
-        rl_edge = (r_to_l > self.coupling_threshold) & (r_to_l > l_to_r + self.direction_margin)
+        l_to_r = coupling_scores[..., 0]  # 左影响右的耦合强度。
+        r_to_l = coupling_scores[..., 1]  # 右影响左的耦合强度。
+        lr_edge = (l_to_r > self.coupling_threshold) & (l_to_r > r_to_l + self.direction_margin)  # 左先右边。
+        rl_edge = (r_to_l > self.coupling_threshold) & (r_to_l > l_to_r + self.direction_margin)  # 右先左边。
         sync_edge = (
             (l_to_r > self.coupling_threshold)
             & (r_to_l > self.coupling_threshold)
             & ((l_to_r - r_to_l).abs() <= self.direction_margin)
-        )
-        return lr_edge, rl_edge, sync_edge
+        )  # 双向 coupling 都强且差距不大时，认为左右臂更应该同步。
+        return lr_edge, rl_edge, sync_edge  # 每个 mask 形状都是 [B, H]。
 
     def _linear_fallback(
         self,
         actions: torch.Tensor,
         risk: torch.Tensor,
     ) -> Dict[str, torch.Tensor]:
-        batch_size, horizon = actions.shape[:2]
-        device = actions.device
-        dtype = actions.dtype
-        schedule = self._linear_schedule(batch_size, horizon, device, dtype)
-        base_dt = actions.new_tensor(1.0 / max(horizon, 1))
-        durations = torch.ones((batch_size, horizon, 2), device=device, dtype=dtype) * base_dt
-        ends = schedule + durations
-        speed_scale = torch.ones_like(durations)
-        makespan = torch.ones(batch_size, device=device, dtype=dtype)
-        zero = torch.zeros(batch_size, device=device, dtype=dtype)
-        total = self.risk_weight * risk + self.lambda_time * makespan
+        batch_size, horizon = actions.shape[:2]  # fallback 也需要知道 batch 和 horizon。
+        device = actions.device  # 保持 device 一致。
+        dtype = actions.dtype  # 保持 dtype 一致。
+        schedule = self._linear_schedule(batch_size, horizon, device, dtype)  # 线性开始时间。
+        base_dt = actions.new_tensor(1.0 / max(horizon, 1))  # 每步默认持续时间。
+        durations = torch.ones((batch_size, horizon, 2), device=device, dtype=dtype) * base_dt  # 左右臂固定 duration。
+        ends = schedule + durations  # 结束时间。
+        speed_scale = torch.ones_like(durations)  # 无速度缩放。
+        makespan = torch.ones(batch_size, device=device, dtype=dtype)  # 总完成时间近似为 1。
+        zero = torch.zeros(batch_size, device=device, dtype=dtype)  # 多个代价项的零占位。
+        total = self.risk_weight * risk + self.lambda_time * makespan  # fallback 总代价。
         return {
-            "schedule": schedule,
-            "durations": durations,
-            "ends": ends,
-            "speed_scale": speed_scale,
-            "makespan": makespan,
-            "dependency_cost": zero,
-            "dynamics_cost": zero,
-            "risk_cost": risk,
-            "total_cost": total,
-            "dag_precedence_cost": zero,
-            "dag_sync_cost": zero,
-            "dag_critical_cost": zero,
-            "dag_dependency_cost": zero,
-            "dag_edge_count": torch.full_like(zero, max(horizon - 1, 0) * 2.0),
-            "dag_slack": torch.zeros(batch_size, horizon, 2, device=device, dtype=dtype),
-            "dag_criticality": torch.zeros(batch_size, horizon, 2, device=device, dtype=dtype),
+            "schedule": schedule,  # [B, H, 2] 线性开始时间。
+            "durations": durations,  # [B, H, 2] 固定持续时间。
+            "ends": ends,  # [B, H, 2] 结束时间。
+            "speed_scale": speed_scale,  # [B, H, 2] 速度缩放。
+            "makespan": makespan,  # [B] 完成时间。
+            "dependency_cost": zero,  # [B] fallback 下没有 DAG 依赖违反。
+            "dynamics_cost": zero,  # [B] fallback 下不计算动态代价。
+            "risk_cost": risk,  # [B] 动作风险。
+            "total_cost": total,  # [B] fallback 总代价。
+            "dag_precedence_cost": zero,  # [B] DAG 前后序违反代价。
+            "dag_sync_cost": zero,  # [B] DAG 同步代价。
+            "dag_critical_cost": zero,  # [B] DAG 关键边代价。
+            "dag_dependency_cost": zero,  # [B] DAG 依赖总代价。
+            "dag_edge_count": torch.full_like(zero, max(horizon - 1, 0) * 2.0),  # 记录默认时间链边数量。
+            "dag_slack": torch.zeros(batch_size, horizon, 2, device=device, dtype=dtype),  # [B, H, 2] 两个方向的 slack。
+            "dag_criticality": torch.zeros(batch_size, horizon, 2, device=device, dtype=dtype),  # [B, H, 2] 两个方向的 criticality。
         }
 
     def search(
@@ -661,115 +675,115 @@ class DAGCompactScheduler(CompactScheduler):
         left_slice: slice,
         right_slice: slice,
     ) -> Dict[str, torch.Tensor]:
-        batch_size, horizon = actions.shape[:2]
-        device = actions.device
-        dtype = actions.dtype
-        risk = F.softplus(energy_scores) + F.softplus(wm_scores)
+        batch_size, horizon = actions.shape[:2]  # B 是 batch size，H 是 action horizon。
+        device = actions.device  # 后续 tensor 保持 device 一致。
+        dtype = actions.dtype  # 后续 tensor 保持 dtype 一致。
+        risk = F.softplus(energy_scores) + F.softplus(wm_scores)  # 偏好能量和 world-model 分数转为非负风险。
         if (not self.enabled) or horizon <= 1:
-            return self._linear_fallback(actions, risk)
+            return self._linear_fallback(actions, risk)  # 关闭搜索或 horizon 太短时走线性 fallback。
 
-        num = self.num_samples
-        base_dt = actions.new_tensor(1.0 / horizon)
+        num = self.num_samples  # 随机 schedule 候选数量。
+        base_dt = actions.new_tensor(1.0 / horizon)  # 原始线性 schedule 的单步 duration。
         scales = torch.empty(num, batch_size, horizon, 2, device=device, dtype=dtype).uniform_(
             self.min_duration_scale,
             self.max_duration_scale,
-        )
-        scales[0].fill_(1.0)
-        durations = base_dt * scales
+        )  # 随机生成每个候选的左右臂 duration scale。
+        scales[0].fill_(1.0)  # 第 0 个候选固定为线性 baseline。
+        durations = base_dt * scales  # 实际 duration。
         offsets = torch.empty(num, batch_size, 1, 2, device=device, dtype=dtype).uniform_(
             0.0,
             self.max_offset_scale / horizon,
-        )
-        offsets[0].zero_()
+        )  # 左右臂整体开始时间可以有小偏移。
+        offsets[0].zero_()  # baseline 不偏移。
         starts = offsets + torch.cumsum(
             torch.cat([torch.zeros_like(durations[:, :, :1]), durations[:, :, :-1]], dim=2),
             dim=2,
-        )
+        )  # 通过累计 duration 得到每个 step 的开始时间。
 
-        left_start = starts[..., 0]
-        right_start = starts[..., 1]
-        left_duration = durations[..., 0]
-        right_duration = durations[..., 1]
-        left_end = left_start + left_duration
-        right_end = right_start + right_duration
-        makespan = torch.maximum(left_end[:, :, -1], right_end[:, :, -1])
+        left_start = starts[..., 0]  # [N, B, H] 左臂开始时间。
+        right_start = starts[..., 1]  # [N, B, H] 右臂开始时间。
+        left_duration = durations[..., 0]  # [N, B, H] 左臂 duration。
+        right_duration = durations[..., 1]  # [N, B, H] 右臂 duration。
+        left_end = left_start + left_duration  # [N, B, H] 左臂结束时间。
+        right_end = right_start + right_duration  # [N, B, H] 右臂结束时间。
+        makespan = torch.maximum(left_end[:, :, -1], right_end[:, :, -1])  # [N, B] 双臂最后完成时间。
 
-        lr_edge, rl_edge, sync_edge = self._edge_masks(coupling_scores)
-        lr_weight = (coupling_scores[..., 0] * lr_edge.to(dtype)).unsqueeze(0)
-        rl_weight = (coupling_scores[..., 1] * rl_edge.to(dtype)).unsqueeze(0)
+        lr_edge, rl_edge, sync_edge = self._edge_masks(coupling_scores)  # 根据 coupling score 得到三类 DAG 边 mask。
+        lr_weight = (coupling_scores[..., 0] * lr_edge.to(dtype)).unsqueeze(0)  # [1, B, H] 左先右边的权重。
+        rl_weight = (coupling_scores[..., 1] * rl_edge.to(dtype)).unsqueeze(0)  # [1, B, H] 右先左边的权重。
         sync_weight = (
             torch.minimum(coupling_scores[..., 0], coupling_scores[..., 1])
             * sync_edge.to(dtype)
             * self.sync_weight
-        ).unsqueeze(0)
+        ).unsqueeze(0)  # [1, B, H] 同步边权重，取双向 coupling 的较小值。
 
-        lr_slack = right_start - (left_start + self.precedence_fraction * left_duration)
-        rl_slack = left_start - (right_start + self.precedence_fraction * right_duration)
-        lr_violation = F.relu(-lr_slack)
-        rl_violation = F.relu(-rl_slack)
-        precedence_per = lr_weight * lr_violation + rl_weight * rl_violation
-        precedence_cost = precedence_per.mean(dim=-1)
+        lr_slack = right_start - (left_start + self.precedence_fraction * left_duration)  # 左先右约束的剩余时间。
+        rl_slack = left_start - (right_start + self.precedence_fraction * right_duration)  # 右先左约束的剩余时间。
+        lr_violation = F.relu(-lr_slack)  # slack 为负表示右臂开始太早，违反左先右约束。
+        rl_violation = F.relu(-rl_slack)  # slack 为负表示左臂开始太早，违反右先左约束。
+        precedence_per = lr_weight * lr_violation + rl_weight * rl_violation  # 每个 step 的有向前后序违反代价。
+        precedence_cost = precedence_per.mean(dim=-1)  # [N, B] 对 horizon 求平均。
 
-        sync_per = sync_weight * (left_start - right_start).abs()
-        sync_cost = sync_per.mean(dim=-1)
+        sync_per = sync_weight * (left_start - right_start).abs()  # 同步边要求左右臂开始时间接近。
+        sync_cost = sync_per.mean(dim=-1)  # [N, B] 同步代价。
 
-        lr_criticality = torch.exp(-F.relu(lr_slack) / self.critical_tau) * lr_edge.to(dtype).unsqueeze(0)
-        rl_criticality = torch.exp(-F.relu(rl_slack) / self.critical_tau) * rl_edge.to(dtype).unsqueeze(0)
-        critical_per = lr_weight * lr_criticality * lr_violation + rl_weight * rl_criticality * rl_violation
-        critical_cost = critical_per.mean(dim=-1) * self.critical_weight
-        dag_dependency_cost = precedence_cost + sync_cost + critical_cost
+        lr_criticality = torch.exp(-F.relu(lr_slack) / self.critical_tau) * lr_edge.to(dtype).unsqueeze(0)  # 左先右边越接近 0 slack 越关键。
+        rl_criticality = torch.exp(-F.relu(rl_slack) / self.critical_tau) * rl_edge.to(dtype).unsqueeze(0)  # 右先左边越接近 0 slack 越关键。
+        critical_per = lr_weight * lr_criticality * lr_violation + rl_weight * rl_criticality * rl_violation  # 关键边上的违反额外加重。
+        critical_cost = critical_per.mean(dim=-1) * self.critical_weight  # [N, B] 关键约束代价。
+        dag_dependency_cost = precedence_cost + sync_cost + critical_cost  # [N, B] DAG 依赖总代价。
 
-        left_actions = actions[:, :, left_slice]
-        right_actions = actions[:, :, right_slice]
-        left_delta = torch.cat([left_actions[:, :1] * 0.0, left_actions[:, 1:] - left_actions[:, :-1]], dim=1)
-        right_delta = torch.cat([right_actions[:, :1] * 0.0, right_actions[:, 1:] - right_actions[:, :-1]], dim=1)
-        left_motion = left_delta.pow(2).mean(dim=-1).unsqueeze(0)
-        right_motion = right_delta.pow(2).mean(dim=-1).unsqueeze(0)
+        left_actions = actions[:, :, left_slice]  # 取左臂动作维度。
+        right_actions = actions[:, :, right_slice]  # 取右臂动作维度。
+        left_delta = torch.cat([left_actions[:, :1] * 0.0, left_actions[:, 1:] - left_actions[:, :-1]], dim=1)  # 左臂相邻 step 动作差。
+        right_delta = torch.cat([right_actions[:, :1] * 0.0, right_actions[:, 1:] - right_actions[:, :-1]], dim=1)  # 右臂相邻 step 动作差。
+        left_motion = left_delta.pow(2).mean(dim=-1).unsqueeze(0)  # [1, B, H] 左臂动作变化强度。
+        right_motion = right_delta.pow(2).mean(dim=-1).unsqueeze(0)  # [1, B, H] 右臂动作变化强度。
         dynamics_cost = (
             left_motion / left_duration.clamp_min(1.0e-4)
             + right_motion / right_duration.clamp_min(1.0e-4)
-        ).mean(dim=-1)
+        ).mean(dim=-1)  # [N, B] duration 越短且动作变化越大，代价越高。
 
-        risk_cost = risk.unsqueeze(0).expand(num, -1)
+        risk_cost = risk.unsqueeze(0).expand(num, -1)  # [N, B] 每个 schedule 候选共享动作风险。
         total = (
             self.lambda_time * makespan
             + self.dependency_weight * dag_dependency_cost
             + self.dynamics_weight * dynamics_cost
             + self.risk_weight * risk_cost
-        )
-        best_idx = total.argmin(dim=0)
-        batch_idx = torch.arange(batch_size, device=device)
-        best_starts = starts[best_idx, batch_idx]
-        best_durations = durations[best_idx, batch_idx]
-        best_ends = best_starts + best_durations
-        best_speed_scale = base_dt / best_durations.clamp_min(1.0e-4)
-        best_lr_slack = lr_slack[best_idx, batch_idx]
-        best_rl_slack = rl_slack[best_idx, batch_idx]
-        best_lr_crit = lr_criticality[best_idx, batch_idx]
-        best_rl_crit = rl_criticality[best_idx, batch_idx]
+        )  # [N, B] 每个候选 schedule 的总 cost。
+        best_idx = total.argmin(dim=0)  # [B] 每个样本选 cost 最低的候选。
+        batch_idx = torch.arange(batch_size, device=device)  # gather 辅助索引。
+        best_starts = starts[best_idx, batch_idx]  # [B, H, 2] 最优开始时间。
+        best_durations = durations[best_idx, batch_idx]  # [B, H, 2] 最优持续时间。
+        best_ends = best_starts + best_durations  # [B, H, 2] 最优结束时间。
+        best_speed_scale = base_dt / best_durations.clamp_min(1.0e-4)  # [B, H, 2] duration 压缩对应速度放大。
+        best_lr_slack = lr_slack[best_idx, batch_idx]  # [B, H] 最优左先右 slack。
+        best_rl_slack = rl_slack[best_idx, batch_idx]  # [B, H] 最优右先左 slack。
+        best_lr_crit = lr_criticality[best_idx, batch_idx]  # [B, H] 最优左先右 criticality。
+        best_rl_crit = rl_criticality[best_idx, batch_idx]  # [B, H] 最优右先左 criticality。
         edge_count = (
             lr_edge.to(dtype).sum(dim=-1)
             + rl_edge.to(dtype).sum(dim=-1)
             + sync_edge.to(dtype).sum(dim=-1)
             + float(max(horizon - 1, 0) * 2)
-        )
+        )  # [B] 显式 coupling 边数 + 左右臂各自时间链边数。
         return {
-            "schedule": best_starts,
-            "durations": best_durations,
-            "ends": best_ends,
-            "speed_scale": best_speed_scale,
-            "makespan": makespan[best_idx, batch_idx],
-            "dependency_cost": dag_dependency_cost[best_idx, batch_idx],
-            "dynamics_cost": dynamics_cost[best_idx, batch_idx],
-            "risk_cost": risk,
-            "total_cost": total[best_idx, batch_idx],
-            "dag_precedence_cost": precedence_cost[best_idx, batch_idx],
-            "dag_sync_cost": sync_cost[best_idx, batch_idx],
-            "dag_critical_cost": critical_cost[best_idx, batch_idx],
-            "dag_dependency_cost": dag_dependency_cost[best_idx, batch_idx],
-            "dag_edge_count": edge_count,
-            "dag_slack": torch.stack([F.relu(best_lr_slack), F.relu(best_rl_slack)], dim=-1),
-            "dag_criticality": torch.stack([best_lr_crit, best_rl_crit], dim=-1),
+            "schedule": best_starts,  # 最优左右臂开始时间。
+            "durations": best_durations,  # 最优左右臂持续时间。
+            "ends": best_ends,  # 最优左右臂结束时间。
+            "speed_scale": best_speed_scale,  # 最优速度缩放。
+            "makespan": makespan[best_idx, batch_idx],  # 最优计划总完成时间。
+            "dependency_cost": dag_dependency_cost[best_idx, batch_idx],  # 给通用接口使用的依赖代价。
+            "dynamics_cost": dynamics_cost[best_idx, batch_idx],  # 最优动态代价。
+            "risk_cost": risk,  # 动作候选风险。
+            "total_cost": total[best_idx, batch_idx],  # 最优综合代价。
+            "dag_precedence_cost": precedence_cost[best_idx, batch_idx],  # DAG 有向前后序违反代价。
+            "dag_sync_cost": sync_cost[best_idx, batch_idx],  # DAG 同步代价。
+            "dag_critical_cost": critical_cost[best_idx, batch_idx],  # DAG 关键边额外代价。
+            "dag_dependency_cost": dag_dependency_cost[best_idx, batch_idx],  # DAG 依赖总代价。
+            "dag_edge_count": edge_count,  # DAG 边数量统计。
+            "dag_slack": torch.stack([F.relu(best_lr_slack), F.relu(best_rl_slack)], dim=-1),  # 非负 slack，越大表示约束越宽松。
+            "dag_criticality": torch.stack([best_lr_crit, best_rl_crit], dim=-1),  # 关键性，越接近 1 表示越接近约束边界。
         }
 
 

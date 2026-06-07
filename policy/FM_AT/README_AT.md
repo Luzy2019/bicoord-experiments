@@ -1,59 +1,80 @@
-# FM_AT: Action-Time Flow Matching Policy
+# FM_AT: Coupling-Scheduled Action-Only Flow Matching Policy
 
-这个分支从 `policy/FM` 轻量复制而来，实现的是最终讨论的 **不使用 alpha、不使用显式门控** 的方案：
-
-```text
-Y = (A_L, A_R, t_L, t_R)
-```
-
-Flow Matching 直接学习从噪声到动作-时间联合 trace 的向量场：
+这个分支不再显式生成 `t_L, t_R`，也不使用 `alpha * velocity` 或显式门控。主模型只生成左右臂动作：
 
 ```text
-dY / d tau = v_theta(Y_tau, tau, O)
+A = (A_L, A_R)
 ```
 
-这和 `alpha * velocity` 的后处理不同：紧凑执行不是乘出来的，而是由生成变量里的时间通道表达。
+时间不再是训练标签，而是外部 compact scheduler 的优化结果。整体方法是：
+
+```text
+Flow proposal
++ learned bimanual coupling estimator
++ compact schedule search
++ action energy / latent world model verifier
+```
 
 ## 核心文件
 
-- `flow_matching_policy/policy/action_time_flow_unet_image_policy.py`
+- `flow_matching_policy/policy/coupling_scheduled_flow_unet_image_policy.py`
 - `flow_matching_policy/config/robot_fm_at_16.yaml`
 - `train_at.sh`
 
-## 训练目标
+## 研究思想
+
+Flow Matching 学习 action-only 向量场：
 
 ```text
-L = L_FM(Y)
-  + lambda_energy * L_energy(Y)
-  + lambda_world * L_world(z_t, Y_t -> z_{t+1})
-  + lambda_mono * L_monotonic(t_L, t_R)
+dA / d tau = v_theta(A_tau, tau, O)
 ```
 
-`L_FM` 使用 rectified-flow 形式：
+训练时使用 rectified-flow：
 
 ```text
-Y_tau = (1 - tau) * noise + tau * Y_data
-target_velocity = Y_data - noise
+A_tau = (1 - tau) * noise + tau * A_data
+target_velocity = A_data - noise
 ```
 
-## Compact trace 如何学习
-
-原始 demo 没有紧凑轨迹时，zarr 不含 `time_trace`，dataset 默认给线性时间。真正的改进闭环是：
+紧凑执行不从 demo 的 `time_trace` 学，也不由模型直接输出。推理时采样多个动作候选，然后用耦合感知调度器搜索更短 schedule：
 
 ```text
-Base FM_AT
--> sample action-time candidates
--> sim/WM rollout and score
--> select compact successful traces
--> save data/time_trace
--> distill back into FM_AT
+minimize risk(A, O) + dependency(S, C) + dynamics(A, S) + lambda_time * makespan(S)
 ```
 
-推理时也可以直接多采样 rerank：
+其中 `S` 是 scheduler 返回的执行时间表，`C` 是左右臂耦合强度。
+
+## T3: 左右臂耦合估计
+
+辅助分支同时学习边缘和条件动作模型：
 
 ```text
-score(Y|O) = E_trace(Y,O) + lambda_time * makespan(Y)
+p(a_L | O)
+p(a_R | O)
+p(a_L | a_R, O)
+p(a_R | a_L, O)
 ```
+
+用条件分支相对边缘分支的收益估计耦合：
+
+```text
+C_{L->R} = loss_marginal_R - loss_conditional_R
+C_{R->L} = loss_marginal_L - loss_conditional_L
+```
+
+这些分数只用于调度约束和日志，不作为 gate，也不混合主 Flow 输出。
+
+## T1: 通用 compact scheduler
+
+调度器使用非 task-specific 归纳偏置：
+
+- 同臂动作顺序必须保持。
+- 低耦合跨臂片段允许重叠。
+- 高耦合跨臂片段增加 precedence / synchronization cost。
+- 高动作变化片段增加 dynamics cost。
+- WM uncertainty / action energy 高的候选增加 risk cost。
+
+第一版使用 lightweight CEM-style schedule proposal search，只选择动作候选和 schedule，不 warp 动作轨迹。
 
 ## 训练
 
@@ -62,7 +83,7 @@ cd policy/FM_AT
 bash train_at.sh stack_bowls demo_clean 50 100 0
 ```
 
-增加推理候选 rerank：
+增加推理动作候选 rerank：
 
 ```bash
 bash train_at.sh stack_bowls demo_clean 50 100 0 4
@@ -74,5 +95,9 @@ bash train_at.sh stack_bowls demo_clean 50 100 0 4
 
 - `action`: 现有环境可执行动作。
 - `action_pred`: 完整动作 chunk。
-- `time_trace`: 生成的 `(t_L, t_R)`。
-- `candidate_scores`: 多候选 energy + compactness 分数。
+- `compact_schedule`: scheduler 返回的 `(left_start, right_start)`。
+- `makespan`: compact schedule 的总执行时长 proxy。
+- `coupling_scores`: `(C_{L->R}, C_{R->L})` 的逐步估计。
+- `candidate_scores`: 多候选综合分数。
+- `wm_scores`: latent world model 风险分数。
+- `collision_or_risk_cost`: energy / WM 风险代理代价。

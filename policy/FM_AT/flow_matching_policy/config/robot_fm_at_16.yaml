@@ -2,12 +2,12 @@ defaults:
   - task: default_task_16
   - _self_
 
-name: action_time_fm_robot_${task.name}
+name: coupling_scheduled_fm_robot_${task.name}
 _target_: flow_matching_policy.workspace.robotworkspace.RobotWorkspace
 
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}
-exp_name: "action_time_fm"
+exp_name: "coupling_scheduled_fm"
 
 horizon: 12
 n_obs_steps: 3
@@ -19,7 +19,7 @@ keypoint_visible_rate: 1.0
 obs_as_global_cond: True
 
 policy:
-  _target_: flow_matching_policy.policy.action_time_flow_unet_image_policy.ActionTimeFlowUnetImagePolicy
+  _target_: flow_matching_policy.policy.coupling_scheduled_flow_unet_image_policy.CouplingScheduledFlowUnetImagePolicy
 
   shape_meta: ${shape_meta}
 
@@ -53,10 +53,28 @@ policy:
   n_groups: 8
   cond_predict_scale: True
 
-  time_dim: 2
-  action_time_rerank_samples: 1
-  compactness_weight: 1.0e-1
-  monotonic_loss_weight: 1.0e-2
+  # Action-only generation. Compact timing is produced by the external
+  # coupling-aware scheduler, not by generated time channels.
+  left_action_dim: null
+  right_action_dim: null
+  left_action_start: 0
+  right_action_start: null
+
+  coupling_enabled: True
+  coupling_aux_loss_weight: 2.5e-1
+
+  scheduler_enabled: True
+  scheduler_num_samples: 16
+  scheduler_lambda_time: 1.0e-1
+  scheduler_dependency_weight: 1.0
+  scheduler_dynamics_weight: 2.5e-1
+  scheduler_risk_weight: 1.0
+  scheduler_min_duration_scale: 0.5
+  scheduler_max_duration_scale: 1.0
+  scheduler_max_offset_scale: 0.25
+
+  action_rerank_samples: 4
+
   energy_loss_weight: 1.0e-2
   energy_hidden_dim: 256
   energy_margin: 1.0
@@ -117,7 +135,7 @@ training:
   tqdm_interval_sec: 1.0
 
 logging:
-  project: action_time_flow_matching_policy_debug
+  project: coupling_scheduled_flow_matching_policy_debug
   resume: True
   mode: online
   name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}

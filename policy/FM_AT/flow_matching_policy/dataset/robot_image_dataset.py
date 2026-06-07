@@ -3,7 +3,6 @@ import numba
 import torch
 import numpy as np
 import copy
-import zarr
 from flow_matching_policy.common.pytorch_util import dict_apply
 from flow_matching_policy.common.replay_buffer import ReplayBuffer
 from flow_matching_policy.common.sampler import (
@@ -33,9 +32,6 @@ class RobotImageDataset(BaseImageDataset):
 
         super().__init__()
         data_keys = ["head_camera", "left_camera", "right_camera", "state", "action"]
-        zarr_root = zarr.open(zarr_path, mode="r")
-        if "time_trace" in zarr_root["data"]:
-            data_keys.append("time_trace")
         self.replay_buffer = ReplayBuffer.copy_from_path(
             zarr_path,
             keys=data_keys,
@@ -112,8 +108,6 @@ class RobotImageDataset(BaseImageDataset):
             },
             "action": sample["action"].astype(np.float32),  # T, D
         }
-        if "time_trace" in sample:
-            data["time_trace"] = sample["time_trace"].astype(np.float32)
         return data
 
     def __getitem__(self, idx) -> Dict[str, torch.Tensor]:
@@ -154,8 +148,6 @@ class RobotImageDataset(BaseImageDataset):
             },
             "action": action,  # B, T, D
         }
-        if "time_trace" in samples:
-            data["time_trace"] = samples["time_trace"].to(device, non_blocking=True)
         return data
 
 

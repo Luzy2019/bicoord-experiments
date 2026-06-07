@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Train the action-time Flow Matching policy.
+# Train the action-only coupling-scheduled Flow Matching policy.
 #
 # Usage:
 #   bash train_at.sh <task> <task_config> <expert_data_num> <seed> <gpu_id> [rerank_samples]
@@ -31,7 +31,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${script_dir}"
 
 zarr_path="data/${task_name}-${task_config}-${expert_data_num}.zarr"
-exp_name="${task_name}-action_time_fm"
+exp_name="${task_name}-coupling_scheduled_fm"
 
 export HYDRA_FULL_ERROR=1
 export CUDA_VISIBLE_DEVICES=${gpu_id}
@@ -56,4 +56,4 @@ echo -e "\033[33mgpu id: ${gpu_id}, rerank samples: ${rerank_samples}\033[0m"
     setting="${task_config}" \
     expert_data_num="${expert_data_num}" \
     head_camera_type="${head_camera_type}" \
-    policy.action_time_rerank_samples="${rerank_samples}"
+    policy.action_rerank_samples="${rerank_samples}"

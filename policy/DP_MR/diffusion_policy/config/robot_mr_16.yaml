@@ -9,9 +9,9 @@ task_name: ${task.name}
 shape_meta: ${task.shape_meta}
 exp_name: ${task.name}-robot_dp_mr
 
-horizon: 12
+horizon: 30
 n_obs_steps: 3
-n_action_steps: 10
+n_action_steps: 28
 n_latency_steps: 0
 dataset_obs_steps: ${n_obs_steps}
 past_action_visible: False
@@ -19,7 +19,7 @@ keypoint_visible_rate: 1.0
 obs_as_global_cond: True
 
 policy:
-  _target_: diffusion_policy.policy.multi_rate_diffusion_unet_image_policy.MultiRateDiffusionUnetImagePolicy
+  _target_: diffusion_policy.policy.adaptive_refine_diffusion_transformer_image_policy.AdaptiveRefineDiffusionTransformerImagePolicy
   shape_meta: ${shape_meta}
 
   noise_scheduler:
@@ -51,26 +51,46 @@ policy:
   n_obs_steps: ${n_obs_steps}
   num_inference_steps: 100
   obs_as_global_cond: ${obs_as_global_cond}
+  left_action_dim: 8
+  right_action_dim: 8
+  left_action_start: 0
+  right_action_start: 8
+  coarse_plan_steps: 10
+  max_refine_rounds: 3
+  min_refine_rounds: 1
+  temporal_weight_alpha: 0.25
+  transformer_hidden_dim: 256
+  transformer_n_layer: 6
+  transformer_n_head: 8
+  transformer_ff_mult: 4
+  transformer_dropout: 0.0
+  num_moe_experts: 4
+  enable_cache: True
+  enable_early_exit: True
+  enable_layer_skip: True
+  enable_moe: True
+  enable_pruning: True
+  enable_sparse_attention: True
+  early_exit_threshold: 0.92
+  sparse_attention_band: 4
+  # Teacher U-Net architecture compatibility.
   diffusion_step_embed_dim: 128
   down_dims: [256, 512, 1024]
   kernel_size: 5
   n_groups: 8
   cond_predict_scale: True
-  left_action_dim: 8
-  right_action_dim: 8
-  left_action_start: 0
-  right_action_start: 8
-  main_arm: left
-  assist_arm: right
-  assist_stride: 5
-  min_assist_horizon: 4
-  assist_upsample_mode: hold
   teacher:
     enabled: True
     ckpt_path: null
+  loss:
+    flow_or_diffusion_loss_weight: 1.0
     dense_loss_weight: 1.0
     demo_loss_weight: 0.5
-    assist_smooth_weight: 0.01
+    temporal_front_loss_weight: 0.5
+    refine_improvement_weight: 0.1
+    gate_budget_weight: 0.05
+    cache_consistency_weight: 0.02
+    moe_balance_weight: 0.01
 
 ema:
   _target_: diffusion_policy.model.diffusion.ema_model.EMAModel

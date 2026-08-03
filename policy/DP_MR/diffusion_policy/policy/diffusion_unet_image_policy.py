@@ -77,7 +77,9 @@ class DiffusionUnetImagePolicy(BaseImagePolicy):
         self.n_action_steps = n_action_steps
         self.n_obs_steps = n_obs_steps
         self.obs_as_global_cond = obs_as_global_cond
-        self.kwargs = kwargs
+        # Keep teacher-stage compatibility with MR configs that pass extra policy
+        # fields through Hydra. Only scheduler.step kwargs should survive here.
+        self.kwargs = {k: v for k, v in kwargs.items() if k in ("return_dict",)}
 
         if num_inference_steps is None:
             num_inference_steps = noise_scheduler.config.num_train_timesteps
